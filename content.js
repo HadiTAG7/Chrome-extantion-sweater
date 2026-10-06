@@ -8,7 +8,7 @@
  *   - colours "Initiated" bookings close to (or past) their time yellow / red,
  *   - marks bookings that appeared since the last refreshes as new, with a Windows notification,
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
- *   - reloads the page every REFRESH_MINUTES (and follows "today" past midnight),
+ *   - reloads the page every few minutes (set from the pill; follows "today" past midnight),
  *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
  *   - shows a status pill at the bottom of the page: countdown, day summary, a per-biker panel
  *     (with a copy-for-WhatsApp button) and the controls.
@@ -21,7 +21,7 @@
   'use strict';
 
   // ===== الإعدادات: عدّلها هنا ثم اضغط زر التحديث ↻ على الإضافة في chrome://extensions =====
-  const REFRESH_MINUTES = 10; // كل كم دقيقة تتحدّث الصفحة
+  const REFRESH_MINUTES = 5; // كل كم دقيقة تتحدّث الصفحة (افتراضياً، وتقدر تغيّره من الشريط)
   const GRACE_MINUTES = 30; // الغسلة تختفي بعد موعدها بكم دقيقة
   const PAGE_SIZE = 50; // عدد الصفوف في الصفحة (50 أكبر خيار يعرضه الموقع)
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
@@ -29,9 +29,10 @@
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
   const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.3.1';
+  const VERSION = '1.4.0';
   const MINUTE = 60 * 1000;
-  const REFRESH_MS = REFRESH_MINUTES * MINUTE;
+  const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
+  const REFRESH_PRESETS = [5, 10, 15, 30];
   const GRACE_MS = GRACE_MINUTES * MINUTE;
   const NEW_BADGE_MS = NEW_BADGE_MINUTES * MINUTE;
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
@@ -124,6 +125,14 @@
     copyFailed: 'ما انتسخ',
     copyTitle: 'نسخ غسلاته الباقية كنص للواتساب',
     copyHeader: (name) => `غسلات ${name} الباقية:`,
+    refreshTitle: (n) => `تتحدّث كل ${n} دقيقة، اضغط لتغيير الوقت`,
+    refreshHeading: 'وقت التحديث',
+    every: 'كل',
+    minutesUnit: 'دقيقة',
+    save: 'حفظ',
+    presets: 'اختيار سريع:',
+    refreshHint: `من ${REFRESH_RANGE[0]} إلى ${REFRESH_RANGE[1]} دقيقة، وينحفظ لكل تبويبات البوابة`,
+    refreshError: `اكتب رقم صحيح من ${REFRESH_RANGE[0]} إلى ${REFRESH_RANGE[1]}`,
     unreadable: '⚠ ما قدرت أقرأ أوقات الغسلات',
     morePages: '⚠ فيه صفحات ثانية',
     timezone: '⚠ توقيت الجهاز مو توقيت السعودية',
@@ -132,27 +141,34 @@
   if (window.__swx) return; // already injected into this page
   window.__swx = VERSION;
 
-  const store = {
-    get(key) {
-      try {
-        return sessionStorage.getItem(`swx:${key}`);
-      } catch {
-        return null;
-      }
-    },
-    set(key, value) {
-      try {
-        sessionStorage.setItem(`swx:${key}`, String(value));
-      } catch {}
-    },
-    del(key) {
-      try {
-        sessionStorage.removeItem(`swx:${key}`);
-      } catch {}
-    },
-  };
+  function makeStore(area) {
+    // Even reaching the storage object can throw (blocked site data), so it is fetched per call.
+    const storage = () => (area === 'local' ? localStorage : sessionStorage);
+    return {
+      get(key) {
+        try {
+          return storage().getItem(`swx:${key}`);
+        } catch {
+          return null;
+        }
+      },
+      set(key, value) {
+        try {
+          storage().setItem(`swx:${key}`, String(value));
+        } catch {}
+      },
+      del(key) {
+        try {
+          storage().removeItem(`swx:${key}`);
+        } catch {}
+      },
+    };
+  }
+  const store = makeStore('session'); // this tab: survives its automatic reloads
+  const prefs = makeStore('local'); // the user's settings: every tab of the portal, kept for good
 
-  let nextRefreshAt = Date.now() + REFRESH_MS;
+  let refreshMinutes = loadRefreshMinutes();
+  let nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
   let lastApplyAt = 0;
   let lastActivityAt = 0;
   let phase = 'idle'; // idle | overlay | activity | probing | offline
@@ -161,7 +177,8 @@
   let sort = loadSort();
   let stats = emptyStats();
   let bikers = []; // per-biker summaries for the panel
-  let panelOpen = false;
+  let panelOpen = false; // the bikers panel
+  let editorOpen = false; // the refresh interval editor
   let lastHref = '';
   let wasOnList = false;
   let lastDates = null;
@@ -323,15 +340,47 @@
     const entered = nowOnList && !wasOnList;
     wasOnList = nowOnList;
     if (!nowOnList) {
-      panelOpen = false;
+      panelOpen = editorOpen = false;
       return;
     }
     if (entered) {
       if (fixPageSizeOnSpaEntry()) return;
-      nextRefreshAt = Date.now() + REFRESH_MS;
+      nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
       phase = 'idle';
     }
     noteTrackedDay();
+  }
+
+  // ---------- refresh interval (chosen from the pill) ----------
+
+  function validMinutes(value) {
+    const minutes = Number(value);
+    return Number.isInteger(minutes) && minutes >= REFRESH_RANGE[0] && minutes <= REFRESH_RANGE[1]
+      ? minutes
+      : null;
+  }
+
+  function loadRefreshMinutes() {
+    return validMinutes(prefs.get('refreshMinutes')) ?? REFRESH_MINUTES;
+  }
+
+  // The countdown restarts from the new interval, here and (through the storage event) in the
+  // portal's other tabs.
+  function setRefreshMinutes(minutes) {
+    refreshMinutes = minutes;
+    if (minutes === REFRESH_MINUTES) prefs.del('refreshMinutes');
+    else prefs.set('refreshMinutes', minutes);
+    nextRefreshAt = Date.now() + minutes * MINUTE;
+    if (phase !== 'offline') phase = 'idle';
+    editorOpen = false;
+    renderPill();
+  }
+
+  function onStorage(event) {
+    if (event.key !== 'swx:refreshMinutes') return;
+    refreshMinutes = loadRefreshMinutes();
+    nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
+    renderPill();
   }
 
   // ---------- reading the table ----------
@@ -743,8 +792,9 @@
 
   function onClick(event) {
     if (!onList()) return;
-    // A click anywhere outside the pill closes the bikers panel.
-    if (panelOpen && pill && !event.composedPath().includes(pill.host)) setPanel(false);
+    // A click anywhere outside the pill closes its panels.
+    const outside = pill && !event.composedPath().includes(pill.host);
+    if ((panelOpen || editorOpen) && outside) setPanel(null);
     const th = sortableHeader(event.target);
     if (th) return toggleSort(th.getAttribute(ATTR_SORTABLE));
     const item = event.target instanceof Element && event.target.closest('[role="menuitem"]');
@@ -752,7 +802,7 @@
   }
 
   function onKeyDown(event) {
-    if (event.key === 'Escape' && panelOpen) return setPanel(false);
+    if (event.key === 'Escape' && (panelOpen || editorOpen)) return setPanel(null);
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const th = onList() && sortableHeader(event.target);
     if (!th) return;
@@ -770,7 +820,8 @@
 
   function busyReason(now) {
     const idle = now - lastActivityAt;
-    if (idle < OVERLAY_IDLE_LIMIT_MS && (panelOpen || overlayOpen())) return 'overlay';
+    const open = panelOpen || editorOpen || overlayOpen();
+    if (idle < OVERLAY_IDLE_LIMIT_MS && open) return 'overlay';
     if (idle < ACTIVITY_GRACE_MS && now - nextRefreshAt < MAX_ACTIVITY_POSTPONE_MS) {
       return 'activity';
     }
@@ -879,6 +930,19 @@
     .biker.yellow .next { color: #f59e0b; opacity: 1; font-weight: 700; }
     .biker.red .next { color: #ef4444; opacity: 1; font-weight: 700; }
     .empty { padding: 8px 0; opacity: 0.7; }
+    /* The countdown doubles as the button that opens the refresh editor. */
+    .status { border: 0; padding: 0; border-radius: 4px; }
+    .status:hover { background: none; text-decoration: underline; }
+    .panel.refresh { width: min(360px, calc(100vw - 32px)); }
+    .refresh-form { display: flex; align-items: center; gap: 8px; padding: 4px 0 8px; }
+    .refresh-form input {
+      width: 5em; font: inherit; color: inherit; text-align: center;
+      background: transparent; border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+      border-radius: 8px; padding: 2px 6px;
+    }
+    .presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .hint { padding-top: 6px; font-size: 12px; opacity: 0.7; white-space: normal; }
+    .error { padding-top: 6px; font-size: 12px; color: #ef4444; white-space: normal; }
     [hidden] { display: none !important; }
   `;
 
@@ -898,9 +962,28 @@
         </div>
         <div class="panel-list"></div>
       </div>
+      <div class="panel refresh" role="dialog" aria-label="${TXT.refreshHeading}" dir="rtl" lang="ar" hidden>
+        <div class="panel-head">
+          <span>${TXT.refreshHeading}</span>
+          <button type="button" class="close-refresh" aria-label="${TXT.close}">×</button>
+        </div>
+        <form class="refresh-form" novalidate>
+          <label>${TXT.every}
+            <input class="minutes" type="number" inputmode="numeric" step="1"
+              min="${REFRESH_RANGE[0]}" max="${REFRESH_RANGE[1]}">
+            ${TXT.minutesUnit}</label>
+          <button type="submit">${TXT.save}</button>
+        </form>
+        <div class="presets">
+          <span>${TXT.presets}</span>
+          ${REFRESH_PRESETS.map((n) => `<button type="button" data-minutes="${n}">${n}</button>`).join('')}
+        </div>
+        <div class="hint">${TXT.refreshHint}</div>
+        <div class="error" hidden>${TXT.refreshError}</div>
+      </div>
       <div class="pill" dir="rtl" lang="ar">
         <div class="row">
-          <span class="part"><span class="status"></span></span>
+          <span class="part"><button type="button" class="status" aria-expanded="false"></button></span>
           <span class="part summary" hidden><span class="sep">·</span><span class="summary-text"></span></span>
           <span class="part late" hidden><span class="sep">·</span><span class="late-text"></span></span>
           <span class="part fresh" hidden><span class="sep">·</span><span class="fresh-text"></span></span>
@@ -942,20 +1025,42 @@
       panel: find('.panel'),
       list: find('.panel-list'),
       panelSignature: null,
+      editor: find('.panel.refresh'),
+      minutes: find('.minutes'),
+      error: find('.error'),
     };
     pill.late.title = TXT.lateTitle;
     pill.toggle.title = TXT.toggleTitle;
     pill.toggle.addEventListener('click', toggleShowPast);
-    pill.bikersButton.addEventListener('click', () => setPanel(!panelOpen));
-    find('.close').addEventListener('click', () => setPanel(false));
+    pill.bikersButton.addEventListener('click', () => setPanel(panelOpen ? null : 'bikers'));
+    pill.status.addEventListener('click', () => setPanel(editorOpen ? null : 'refresh'));
+    find('.close').addEventListener('click', () => setPanel(null));
+    find('.close-refresh').addEventListener('click', () => setPanel(null));
     find('.reset').addEventListener('click', () => setSort(DEFAULT_SORT.key, DEFAULT_SORT.dir));
+    find('.refresh-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const minutes = validMinutes(pill.minutes.value);
+      if (minutes == null) pill.error.hidden = false;
+      else setRefreshMinutes(minutes);
+    });
+    for (const preset of shadow.querySelectorAll('[data-minutes]')) {
+      preset.addEventListener('click', () => setRefreshMinutes(Number(preset.dataset.minutes)));
+    }
     document.body.appendChild(host);
     return pill;
   }
 
-  function setPanel(open) {
-    panelOpen = open;
+  // One panel at a time above the pill: 'bikers', 'refresh' or null (closed).
+  function setPanel(which) {
+    panelOpen = which === 'bikers';
+    editorOpen = which === 'refresh';
     renderPill();
+    if (editorOpen && pill) {
+      pill.minutes.value = refreshMinutes;
+      pill.error.hidden = true;
+      pill.minutes.focus();
+      pill.minutes.select();
+    }
   }
 
   // Rebuilt only when its content changes, so a "copied" confirmation isn't wiped by the ticks.
@@ -1044,6 +1149,9 @@
     p.host.style.setProperty('display', visible ? 'block' : 'none', 'important');
     if (!visible) return;
     setText(p.status, statusText());
+    setValue(p.status, 'title', TXT.refreshTitle(refreshMinutes));
+    p.status.setAttribute('aria-expanded', String(editorOpen));
+    p.editor.hidden = !editorOpen;
     p.summary.hidden = stats.total === 0;
     setText(p.summaryText, TXT.summary(stats));
     const late = [stats.red && `🔴 ${stats.red}`, stats.yellow && `🟡 ${stats.yellow}`];
@@ -1088,6 +1196,7 @@
       // Capture phase: runs before the portal's own handlers (the Asc/Desc menu among them).
       window.addEventListener('click', (event) => safe(() => onClick(event)), true);
       window.addEventListener('keydown', (event) => safe(() => onKeyDown(event)), true);
+      window.addEventListener('storage', (event) => safe(() => onStorage(event)));
       window.addEventListener('online', tick);
       window.addEventListener('pageshow', tick);
       document.addEventListener('visibilitychange', tick);
