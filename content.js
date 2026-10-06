@@ -27,8 +27,9 @@
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
+  const NEW_BOOKING_SOUND = true; // نغمة الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.2.0';
+  const VERSION = '1.3.0';
   const MINUTE = 60 * 1000;
   const REFRESH_MS = REFRESH_MINUTES * MINUTE;
   const GRACE_MS = GRACE_MINUTES * MINUTE;
@@ -596,8 +597,9 @@
     return count;
   }
 
-  // background.js turns this into the Windows notification. Without the extension context
-  // (injected as a plain script, or after the extension was reloaded) there is nothing to tell.
+  // background.js turns this into the chime and the Windows notification. Without the extension
+  // context (injected as a plain script, or after the extension was reloaded) there is nobody to
+  // tell.
   function notifyNew(items) {
     const lines = [...items]
       .sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity))
@@ -612,6 +614,7 @@
         type: 'swx:new-bookings',
         count: items.length,
         lines,
+        sound: NEW_BOOKING_SOUND,
       });
       sent?.catch?.(() => {});
     } catch {}
