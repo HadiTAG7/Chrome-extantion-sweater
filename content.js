@@ -3,7 +3,8 @@
  *
  * Runs on https://ssp-portal.sweater.sa/bookings and:
  *   - hides bookings whose slot started more than GRACE_MINUTES ago,
- *   - sorts the rows by booking date and time,
+ *   - sorts the rows by booking time (default) or by the column picked in a header,
+ *   - shows each biker's wash number of the day under the name ("2/4"),
  *   - reloads the page every REFRESH_MINUTES (and follows "today" past midnight),
  *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
  *   - shows a small status pill at the bottom of the page.
@@ -20,7 +21,7 @@
   const GRACE_MINUTES = 30; // الغسلة تختفي بعد موعدها بكم دقيقة
   const PAGE_SIZE = 50; // عدد الصفوف في الصفحة (50 أكبر خيار يعرضه الموقع)
 
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const MINUTE = 60 * 1000;
   const REFRESH_MS = REFRESH_MINUTES * MINUTE;
   const GRACE_MS = GRACE_MINUTES * MINUTE;
@@ -38,7 +39,20 @@
     date: ['booking date', 'تاريخ الحجز'],
     time: ['booking time', 'وقت الحجز'],
     id: ['id', 'الرقم'],
+    biker: ['biker', 'السائق'],
+    zone: ['zone', 'المنطقة'],
+    service: ['service time', 'وقت الخدمة'],
+    status: ['status', 'الحالة'],
   };
+  // Bookings that are not (or will not be) washed: left out of the bikers' wash numbers.
+  const CANCELLED_RE = /cancel|ألغيت|failed|فشلت|rescheduled|معاد جدولتها/i;
+  const SORT_KEYS = ['time', 'biker', 'zone', 'id', 'service'];
+  const DEFAULT_SORT = { key: 'time', dir: 'asc' };
+  // Columns the portal can't sort: their headers become clickable.
+  const OWN_SORT_COLUMNS = ['time', 'biker'];
+  // Columns with the portal's own Asc/Desc menu, and the order each choice maps to.
+  const MENU_SORT_KEYS = { id: 'id', zone: 'zone', date: 'time', service: 'service' };
+  const COLLATOR = new Intl.Collator(['ar', 'en'], { numeric: true, sensitivity: 'base' });
   const OVERLAY_SELECTOR = '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]';
   const PAGER_LABEL_RE = /^(go to (next|previous) page|الانتقال إلى الصفحة (التالية|السابقة))$/i;
   const MONTHS = 'jan feb mar apr may jun jul aug sep oct nov dec'.split(' ');
@@ -47,6 +61,8 @@
   const ATTR_PAST = 'data-swx-past';
   const ATTR_SHOW_PAST = 'data-swx-show-past';
   const ATTR_EMPTY = 'data-swx-empty';
+  const ATTR_SEQ = 'data-swx-seq';
+  const ATTR_SORTABLE = 'data-swx-sortable';
 
   const TXT = {
     refreshIn: 'التحديث بعد',
@@ -59,6 +75,16 @@
     hide: 'إخفاء',
     toggleTitle: `إظهار أو إخفاء الغسلات اللي عدى على موعدها أكثر من ${GRACE_MINUTES} دقيقة`,
     noUpcoming: 'لا توجد غسلات قادمة',
+    sortedBy: 'الترتيب:',
+    resetSort: 'رجوع للوقت',
+    sortNames: {
+      time: 'الوقت',
+      biker: 'البايكر',
+      zone: 'المنطقة',
+      id: 'رقم الحجز',
+      service: 'وقت الخدمة',
+    },
+    seqTitle: (n, total) => `الغسلة ${n} من ${total} لهذا البايكر اليوم`,
     unreadable: '⚠ ما قدرت أقرأ أوقات الغسلات',
     morePages: '⚠ فيه صفحات ثانية',
     timezone: '⚠ توقيت الجهاز مو توقيت السعودية',
@@ -93,6 +119,7 @@
   let phase = 'idle'; // idle | overlay | activity | probing | offline
   let reloading = false;
   let showPast = store.get('showPast') === '1';
+  let sort = loadSort();
   let stats = { rows: 0, parsed: 0, past: 0 };
   let lastHref = '';
   let wasOnList = false;
@@ -260,7 +287,7 @@
   // Column positions from the header labels (English or Arabic UI). Users can hide columns,
   // so positions are looked up on every pass.
   function columnsOf(table) {
-    const cols = { date: -1, time: -1, id: -1 };
+    const cols = Object.fromEntries(Object.keys(HEADERS).map((key) => [key, -1]));
     const head = table.tHead?.rows[0];
     if (!head) return cols;
     Array.from(head.cells).forEach((cell, index) => {
@@ -275,6 +302,12 @@
   function idNumber(cell) {
     const m = cell && /\d+/.exec(norm(cell.textContent));
     return m ? Number(m[0]) : null;
+  }
+
+  // "58m", "1h 8.5m" or "58.46666666666667m" as rendered by the portal; "N/A" has no value.
+  function serviceMinutes(text) {
+    const m = /^(?:(\d+(?:\.\d+)?)h)? ?(?:(\d+(?:\.\d+)?)m)?$/i.exec(text || '');
+    return m && (m[1] || m[2]) ? (+m[1] || 0) * 60 + (+m[2] || 0) : null;
   }
 
   function rowInfo(tr, cols, urlDay) {
@@ -292,7 +325,19 @@
     }
     if (!date) date = urlDay; // date column hidden while viewing a single day
     const ts = date && time ? new Date(date.y, date.m, date.d, time.h, time.mi).getTime() : null;
-    return { tr, data: true, ts, id: idNumber(cells[cols.id >= 0 ? cols.id : 0]) };
+    const cell = (key) => (cols[key] >= 0 ? cells[cols[key]] || null : null);
+    const text = (key) => norm(cell(key)?.textContent) || null;
+    return {
+      tr,
+      data: true,
+      ts,
+      id: idNumber(cells[cols.id >= 0 ? cols.id : 0]),
+      bikerCell: cell('biker'),
+      biker: text('biker'), // name and mobile number: tells two bikers with the same name apart
+      cancelled: CANCELLED_RE.test(text('status') || ''),
+      zone: text('zone'),
+      service: serviceMinutes(text('service')),
+    };
   }
 
   function bookingTables() {
@@ -301,23 +346,74 @@
     return root ? tables : tables.filter((table) => !table.closest(OVERLAY_SELECTOR));
   }
 
-  // Stable order: by time, then booking number; unreadable rows go last. Rows only move inside
-  // their own <tbody> and are never removed, so React's later insertBefore/removeChild calls
-  // still find them where it expects: inside that <tbody>.
+  const sortValue = (item) => (sort.key === 'time' ? item.ts : item[sort.key]);
+
+  // The chosen column first (rows without a value last, in both directions), then time, then
+  // booking number: sorted by biker, each biker's washes follow each other in time order.
+  function compareRows(a, b) {
+    const va = sortValue(a);
+    const vb = sortValue(b);
+    if ((va == null) !== (vb == null)) return va == null ? 1 : -1;
+    if (va != null) {
+      const primary = typeof va === 'string' ? COLLATOR.compare(va, vb) : va - vb;
+      if (primary) return sort.dir === 'desc' ? -primary : primary;
+    }
+    return (
+      (a.ts == null) - (b.ts == null) ||
+      (a.ts || 0) - (b.ts || 0) ||
+      (a.id == null) - (b.id == null) ||
+      (a.id || 0) - (b.id || 0) ||
+      a.index - b.index
+    );
+  }
+
+  // Rows only move inside their own <tbody> and are never removed, so React's later
+  // insertBefore/removeChild calls still find them where it expects: inside that <tbody>.
   function sortRows(tbody, items) {
-    const wanted = items
-      .map((item, index) => ({ ...item, index }))
-      .sort(
-        (a, b) =>
-          (a.ts == null) - (b.ts == null) ||
-          (a.ts || 0) - (b.ts || 0) ||
-          (a.id == null) - (b.id == null) ||
-          (a.id || 0) - (b.id || 0) ||
-          a.index - b.index,
-      );
+    const wanted = items.map((item, index) => ({ ...item, index })).sort(compareRows);
     wanted.forEach((item, position) => {
       const current = tbody.rows[position];
       if (current !== item.tr) tbody.insertBefore(item.tr, current || null);
+    });
+  }
+
+  // "2/4" next to the biker: the booking's place among that biker's washes of the day, counting
+  // every row of the table (hidden past ones too) except cancelled ones.
+  function markSequence(items) {
+    const groups = new Map();
+    for (const item of items) {
+      if (item.ts == null || !item.biker || item.cancelled) continue;
+      const key = `${item.biker}|${ymd(item.ts)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    }
+    const places = new Map();
+    for (const list of groups.values()) {
+      list.sort((a, b) => a.ts - b.ts || (a.id || 0) - (b.id || 0));
+      list.forEach((item, index) => places.set(item, [index + 1, list.length]));
+    }
+    for (const item of items) {
+      if (!item.bikerCell) continue;
+      // The mobile number under the name: shorter than the name, so the badge after it doesn't
+      // widen the column (and the name itself is truncated by the portal when long).
+      const spans = item.bikerCell.querySelectorAll('span');
+      const target = spans[spans.length - 1] || item.bikerCell;
+      const place = places.get(item);
+      setValue(target, ATTR_SEQ, place ? place.join('/') : null);
+      setValue(target, 'title', place ? TXT.seqTitle(...place) : null);
+    }
+  }
+
+  // Booking Time and Biker headers sort on click; aria-sort marks the active column.
+  function markHeaders(table, cols) {
+    const head = table.tHead?.rows[0];
+    if (!head) return;
+    Array.from(head.cells).forEach((th, index) => {
+      const own = OWN_SORT_COLUMNS.find((key) => cols[key] === index) || null;
+      setValue(th, ATTR_SORTABLE, own);
+      setValue(th, 'tabindex', own ? '0' : null);
+      const active = cols[sort.key] === index;
+      setValue(th, 'aria-sort', active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : null);
     });
   }
 
@@ -331,7 +427,9 @@
       const tbody = table.tBodies[0];
       if (!tbody) continue;
       const cols = columnsOf(table);
+      markHeaders(table, cols);
       const items = Array.from(tbody.rows, (tr) => rowInfo(tr, cols, urlDay));
+      markSequence(items);
       let rows = 0;
       let parsed = 0;
       let past = 0;
@@ -354,6 +452,60 @@
     stats = next;
     observer?.takeRecords(); // our own writes must not trigger another pass
     renderPill();
+  }
+
+  // ---------- sorting ----------
+
+  // The chosen order lives in sessionStorage so it survives the automatic reloads of this tab.
+  function loadSort() {
+    const [key, dir] = (store.get('sort') || '').split(':');
+    return SORT_KEYS.includes(key) && (dir === 'asc' || dir === 'desc')
+      ? { key, dir }
+      : { ...DEFAULT_SORT };
+  }
+
+  const isDefaultSort = () => sort.key === DEFAULT_SORT.key && sort.dir === DEFAULT_SORT.dir;
+
+  function setSort(key, dir) {
+    sort = { key, dir };
+    if (isDefaultSort()) store.del('sort');
+    else store.set('sort', `${key}:${dir}`);
+    applyAll();
+  }
+
+  // Same column again flips the direction; another column starts ascending.
+  function toggleSort(key) {
+    setSort(key, sort.key === key && sort.dir === 'asc' ? 'desc' : 'asc');
+  }
+
+  const sortableHeader = (target) =>
+    target instanceof Element ? target.closest(`#root thead th[${ATTR_SORTABLE}]`) : null;
+
+  // The portal's own Asc/Desc column menu: its result would be undone by the next pass, so the
+  // choice becomes the extension's order instead. "Hide" is left to the portal.
+  function sortFromMenu(item) {
+    const dir = { asc: 'asc', desc: 'desc' }[norm(item.textContent).toLowerCase()];
+    const th = document.querySelector('#root thead button[aria-expanded="true"]')?.closest('th');
+    if (!dir || !th) return;
+    const label = norm(th.textContent).toLowerCase();
+    const column = Object.keys(MENU_SORT_KEYS).find((key) => HEADERS[key].includes(label));
+    if (column) setSort(MENU_SORT_KEYS[column], dir);
+  }
+
+  function onClick(event) {
+    if (!onList()) return;
+    const th = sortableHeader(event.target);
+    if (th) return toggleSort(th.getAttribute(ATTR_SORTABLE));
+    const item = event.target instanceof Element && event.target.closest('[role="menuitem"]');
+    if (item) sortFromMenu(item);
+  }
+
+  function onKeyDown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const th = onList() && sortableHeader(event.target);
+    if (!th) return;
+    event.preventDefault();
+    toggleSort(th.getAttribute(ATTR_SORTABLE));
   }
 
   // ---------- auto refresh ----------
@@ -464,6 +616,10 @@
           <span class="sep">·</span><span class="count"></span>
           <button type="button" class="toggle" aria-pressed="false"></button>
         </span>
+        <span class="part sort" hidden>
+          <span class="sep">·</span><span class="sort-text"></span>
+          <button type="button" class="reset"></button>
+        </span>
         <span class="part warn" hidden><span class="sep">·</span><span class="warn-text"></span></span>
       </div>`;
     const find = (selector) => shadow.querySelector(selector);
@@ -473,11 +629,16 @@
       past: find('.past'),
       count: find('.count'),
       toggle: find('.toggle'),
+      sort: find('.sort'),
+      sortText: find('.sort-text'),
+      reset: find('.reset'),
       warn: find('.warn'),
       warnText: find('.warn-text'),
     };
     pill.toggle.title = TXT.toggleTitle;
     pill.toggle.addEventListener('click', toggleShowPast);
+    pill.reset.textContent = TXT.resetSort;
+    pill.reset.addEventListener('click', () => setSort(DEFAULT_SORT.key, DEFAULT_SORT.dir));
     document.body.appendChild(host);
     return pill;
   }
@@ -516,6 +677,9 @@
     setText(p.count, `${TXT.pastCount} ${stats.past}`);
     setText(p.toggle, showPast ? TXT.hide : TXT.show);
     p.toggle.setAttribute('aria-pressed', String(showPast));
+    p.sort.hidden = isDefaultSort();
+    const arrow = sort.dir === 'asc' ? '↑' : '↓';
+    setText(p.sortText, `${TXT.sortedBy} ${TXT.sortNames[sort.key]} ${arrow}`);
     const list = warnings();
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
@@ -541,6 +705,9 @@
       for (const type of ['pointerdown', 'keydown', 'wheel', 'input']) {
         window.addEventListener(type, markActivity, { capture: true, passive: true });
       }
+      // Capture phase: runs before the portal's own handlers (the Asc/Desc menu among them).
+      window.addEventListener('click', (event) => safe(() => onClick(event)), true);
+      window.addEventListener('keydown', (event) => safe(() => onKeyDown(event)), true);
       window.addEventListener('online', tick);
       window.addEventListener('pageshow', tick);
       document.addEventListener('visibilitychange', tick);

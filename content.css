@@ -23,6 +23,47 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
     sans-serif;
 }
 
+/* The biker's wash number of the day ("2/4"), after the mobile number under the name. */
+#root [data-swx-seq]::after {
+  content: attr(data-swx-seq);
+  margin-inline-start: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 999px;
+  background: var(--muted, rgba(127, 127, 127, 0.15));
+  color: var(--foreground, inherit);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  unicode-bidi: isolate; /* "2/4" stays "2/4" in the Arabic (rtl) layout too */
+}
+
+/* Booking Time and Biker headers: the portal can't sort them, the extension can. */
+#root thead th[data-swx-sortable] {
+  cursor: pointer;
+  user-select: none;
+}
+
+#root thead th[data-swx-sortable]:hover > div {
+  text-decoration: underline;
+}
+
+/* The arrow follows the label in a zero-width box, so the column keeps its width. */
+#root thead th[data-swx-sortable][aria-sort] > div::after {
+  display: inline-block;
+  width: 0;
+  white-space: nowrap;
+}
+
+#root thead th[data-swx-sortable][aria-sort='ascending'] > div::after {
+  content: '\00a0↑';
+}
+
+#root thead th[data-swx-sortable][aria-sort='descending'] > div::after {
+  content: '\00a0↓';
+}
+
 @media print {
   swx-pill {
     display: none !important;
