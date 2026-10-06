@@ -5,9 +5,13 @@
  *   - hides bookings whose slot started more than GRACE_MINUTES ago,
  *   - sorts the rows by booking time (default) or by the column picked in a header,
  *   - shows each biker's wash number of the day under the name ("2/4"),
+ *   - colours "Initiated" bookings close to (or past) their time yellow / red,
+ *   - marks bookings that appeared since the last refreshes as new, with a Windows notification,
+ *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
  *   - reloads the page every REFRESH_MINUTES (and follows "today" past midnight),
  *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
- *   - shows a small status pill at the bottom of the page.
+ *   - shows a status pill at the bottom of the page: countdown, day summary, a per-biker panel
+ *     (with a copy-for-WhatsApp button) and the controls.
  *
  * The portal is a React SPA whose table rows are keyed by index: React rewrites the text of
  * existing <tr>s in place. So every pass re-reads the rows from their text, rows are never
@@ -20,11 +24,15 @@
   const REFRESH_MINUTES = 10; // كل كم دقيقة تتحدّث الصفحة
   const GRACE_MINUTES = 30; // الغسلة تختفي بعد موعدها بكم دقيقة
   const PAGE_SIZE = 50; // عدد الصفوف في الصفحة (50 أكبر خيار يعرضه الموقع)
+  const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
+  const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
+  const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
 
-  const VERSION = '1.1.0';
+  const VERSION = '1.2.0';
   const MINUTE = 60 * 1000;
   const REFRESH_MS = REFRESH_MINUTES * MINUTE;
   const GRACE_MS = GRACE_MINUTES * MINUTE;
+  const NEW_BADGE_MS = NEW_BADGE_MINUTES * MINUTE;
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
   const ACTIVITY_GRACE_MS = MINUTE; // no reload within a minute of a click, key or scroll...
   const MAX_ACTIVITY_POSTPONE_MS = 2 * MINUTE; // ...unless the reload is already this late
@@ -46,6 +54,12 @@
   };
   // Bookings that are not (or will not be) washed: left out of the bikers' wash numbers.
   const CANCELLED_RE = /cancel|ألغيت|failed|فشلت|rescheduled|معاد جدولتها/i;
+  // Washed: Collecting Payment, or Visit Completed (shown as the raw code end_visit).
+  const DONE_RE = /collect|تحصيل|end_visit|completed|اكتملت/i;
+  // Confirmed but the biker hasn't set off yet.
+  const INITIATED_RE = /^(initiated|معتمدة)$/i;
+  // The portal's empty table (as opposed to its loading or error row).
+  const EMPTY_RE = /no bookings found|لم يتم العثور على حجوزات/i;
   const SORT_KEYS = ['time', 'biker', 'zone', 'id', 'service'];
   const DEFAULT_SORT = { key: 'time', dir: 'asc' };
   // Columns the portal can't sort: their headers become clickable.
@@ -63,6 +77,10 @@
   const ATTR_EMPTY = 'data-swx-empty';
   const ATTR_SEQ = 'data-swx-seq';
   const ATTR_SORTABLE = 'data-swx-sortable';
+  const ATTR_LATE = 'data-swx-late';
+  const ATTR_LATE_LABEL = 'data-swx-late-label';
+  const ATTR_NEW = 'data-swx-new';
+  const ATTR_SERVICE = 'data-swx-service';
 
   const TXT = {
     refreshIn: 'التحديث بعد',
@@ -85,6 +103,26 @@
       service: 'وقت الخدمة',
     },
     seqTitle: (n, total) => `الغسلة ${n} من ${total} لهذا البايكر اليوم`,
+    summary: (s) =>
+      `الغسلات: ${s.total} · خلصت ${s.done} · باقي ${s.remaining} · ملغية ${s.cancelled}`,
+    lateTitle:
+      `غسلات لسا Initiated: 🔴 باقي ${LATE_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
+      ` 🟡 باقي ${LATE_YELLOW_MINUTES} دقيقة أو أقل`,
+    freshCount: (n) => `جديدة ${n}`,
+    minutesLeft: (n) => `باقي ${duration(n)}`,
+    minutesLate: (n) => `متأخرة ${duration(n)}`,
+    dueNow: 'حان موعدها',
+    bikers: 'البايكرية',
+    close: 'إغلاق',
+    bikerCounts: (done, left) => `خلّص ${done} · باقي ${left}`,
+    nextWash: 'الجاية',
+    allDone: 'خلّص كل غسلاته',
+    noBikers: 'ما فيه غسلات',
+    copy: 'نسخ',
+    copied: 'انتسخ ✓',
+    copyFailed: 'ما انتسخ',
+    copyTitle: 'نسخ غسلاته الباقية كنص للواتساب',
+    copyHeader: (name) => `غسلات ${name} الباقية:`,
     unreadable: '⚠ ما قدرت أقرأ أوقات الغسلات',
     morePages: '⚠ فيه صفحات ثانية',
     timezone: '⚠ توقيت الجهاز مو توقيت السعودية',
@@ -120,7 +158,9 @@
   let reloading = false;
   let showPast = store.get('showPast') === '1';
   let sort = loadSort();
-  let stats = { rows: 0, parsed: 0, past: 0 };
+  let stats = emptyStats();
+  let bikers = []; // per-biker summaries for the panel
+  let panelOpen = false;
   let lastHref = '';
   let wasOnList = false;
   let lastDates = null;
@@ -166,6 +206,53 @@
 
   function setText(el, text) {
     if (el.textContent !== text) el.textContent = text;
+  }
+
+  function make(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text != null) node.textContent = text;
+    return node;
+  }
+
+  // The element holding a cell's value: td > div.flex > div in the portal's markup.
+  const inner = (cell) =>
+    cell && (cell.firstElementChild?.firstElementChild || cell.firstElementChild || cell);
+
+  // "3:15 PM", like the portal.
+  function fmtTime(ms) {
+    const d = new Date(ms);
+    return `${d.getHours() % 12 || 12}:${pad(d.getMinutes())} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
+  }
+
+  // The portal's service time format, rounded: "58m", "1h 9m", "2h".
+  function fmtMinutes(minutes) {
+    const total = Math.round(minutes);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+  }
+
+  // "25 د" or "1 س 20 د", for the late labels.
+  function duration(minutes) {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return h ? `${h} س${m ? ` ${m} د` : ''}` : `${m} د`;
+  }
+
+  function emptyStats() {
+    return {
+      rows: 0,
+      parsed: 0,
+      past: 0,
+      total: 0,
+      done: 0,
+      remaining: 0,
+      cancelled: 0,
+      red: 0,
+      yellow: 0,
+      fresh: 0,
+    };
   }
 
   // ---------- URL: page size and dates ----------
@@ -234,7 +321,10 @@
     const nowOnList = onList();
     const entered = nowOnList && !wasOnList;
     wasOnList = nowOnList;
-    if (!nowOnList) return;
+    if (!nowOnList) {
+      panelOpen = false;
+      return;
+    }
     if (entered) {
       if (fixPageSizeOnSpaEntry()) return;
       nextRefreshAt = Date.now() + REFRESH_MS;
@@ -313,7 +403,9 @@
   function rowInfo(tr, cols, urlDay) {
     const cells = tr.cells;
     // Loading, "No bookings found." and error rows are a single wide cell: leave them alone.
-    if (cells.length < 2) return { tr, data: false, ts: null, id: null };
+    if (cells.length < 2) {
+      return { tr, data: false, ts: null, id: null, text: norm(tr.textContent) };
+    }
     let date = cols.date >= 0 ? parseDate(cells[cols.date]?.textContent) : null;
     let time = cols.time >= 0 ? parseTime(cells[cols.time]?.textContent) : null;
     // A column whose header wasn't found: recognise the value by its shape instead.
@@ -327,15 +419,26 @@
     const ts = date && time ? new Date(date.y, date.m, date.d, time.h, time.mi).getTime() : null;
     const cell = (key) => (cols[key] >= 0 ? cells[cols[key]] || null : null);
     const text = (key) => norm(cell(key)?.textContent) || null;
+    const idCell = cells[cols.id >= 0 ? cols.id : 0];
+    const bikerCell = cell('biker');
+    const status = text('status') || '';
     return {
       tr,
       data: true,
       ts,
-      id: idNumber(cells[cols.id >= 0 ? cols.id : 0]),
-      bikerCell: cell('biker'),
+      id: idNumber(idCell),
+      idCell,
+      idText: norm(idCell.textContent),
+      bikerCell,
       biker: text('biker'), // name and mobile number: tells two bikers with the same name apart
-      cancelled: CANCELLED_RE.test(text('status') || ''),
+      bikerName: norm(bikerCell?.querySelector('span')?.textContent) || text('biker'),
+      timeCell: cell('time'),
+      serviceCell: cell('service'),
+      cancelled: CANCELLED_RE.test(status),
+      done: DONE_RE.test(status),
+      initiated: INITIATED_RE.test(status),
       zone: text('zone'),
+      serviceText: text('service'),
       service: serviceMinutes(text('service')),
     };
   }
@@ -417,12 +520,150 @@
     });
   }
 
+  // "Initiated" (the biker hasn't set off) close to or past the booking time: yellow, then red.
+  function lateLevel(item, now) {
+    if (!item.initiated || item.ts == null) return null;
+    const left = (item.ts - now) / MINUTE;
+    if (left <= LATE_RED_MINUTES) return 'red';
+    return left <= LATE_YELLOW_MINUTES ? 'yellow' : null;
+  }
+
+  function lateLabel(item, now) {
+    const left = Math.ceil((item.ts - now) / MINUTE);
+    if (left > 0) return TXT.minutesLeft(left);
+    const late = Math.floor((now - item.ts) / MINUTE);
+    return late > 0 ? TXT.minutesLate(late) : TXT.dueNow;
+  }
+
+  // Per row: day summary counts, late colour and label, rounded service time.
+  function markRow(item, now, counts) {
+    if (!item.data) return;
+    counts.total++;
+    if (item.cancelled) counts.cancelled++;
+    else if (item.done) counts.done++;
+    else counts.remaining++;
+    const level = lateLevel(item, now);
+    if (level) counts[level]++;
+    setValue(item.tr, ATTR_LATE, level);
+    const time = inner(item.timeCell);
+    if (time) setValue(time, ATTR_LATE_LABEL, level ? lateLabel(item, now) : null);
+    const service = inner(item.serviceCell);
+    if (service) {
+      const rounded = item.service == null ? null : fmtMinutes(item.service);
+      setValue(service, ATTR_SERVICE, rounded && rounded !== item.serviceText ? rounded : null);
+    }
+  }
+
+  // The filters (URL params) the table was loaded with: a booking is only "new" compared with
+  // earlier loads of the same view, never because a date, filter or page changed.
+  function viewKey() {
+    const params = new URLSearchParams(location.search);
+    if (!params.has('page')) params.set('page', '1');
+    return [...params]
+      .map(([key, value]) => `${key}=${value}`)
+      .sort()
+      .join('&');
+  }
+
+  // Bookings that weren't in this view at its earlier loads (this tab): "new" for
+  // NEW_BADGE_MINUTES, plus one Windows notification per batch. The first table seen for a view
+  // (or its "No bookings found." row) is only recorded. Returns how many rows are new.
+  function markNew(items, now) {
+    const bookings = items.filter((item) => item.data && item.id != null);
+    const storeKey = `seen:${viewKey()}`;
+    let seen = null;
+    try {
+      seen = JSON.parse(store.get(storeKey) || 'null');
+    } catch {}
+    if (!seen) {
+      const empty = items.length === 1 && EMPTY_RE.test(items[0].text || '');
+      if (!bookings.length && !empty) return 0; // loading or error row: nothing to record yet
+      seen = Object.fromEntries(bookings.map((item) => [item.id, 0]));
+      store.set(storeKey, JSON.stringify(seen));
+    }
+    const fresh = bookings.filter((item) => !(item.id in seen));
+    if (fresh.length) {
+      for (const item of fresh) seen[item.id] = now;
+      store.set(storeKey, JSON.stringify(seen));
+      notifyNew(fresh);
+    }
+    let count = 0;
+    for (const item of bookings) {
+      const isNew = seen[item.id] > 0 && now - seen[item.id] < NEW_BADGE_MS;
+      if (isNew) count++;
+      setFlag(inner(item.idCell), ATTR_NEW, isNew);
+    }
+    return count;
+  }
+
+  // background.js turns this into the Windows notification. Without the extension context
+  // (injected as a plain script, or after the extension was reloaded) there is nothing to tell.
+  function notifyNew(items) {
+    const lines = [...items]
+      .sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity))
+      .map((item) =>
+        [item.ts == null ? null : fmtTime(item.ts), item.bikerName, item.zone, item.idText]
+          .filter(Boolean)
+          .join(' · '),
+      );
+    try {
+      if (!globalThis.chrome?.runtime?.id) return;
+      const sent = chrome.runtime.sendMessage({
+        type: 'swx:new-bookings',
+        count: items.length,
+        lines,
+      });
+      sent?.catch?.(() => {});
+    } catch {}
+  }
+
+  // The bikers panel: per biker, washes done and left (cancelled ones don't count), the next
+  // one, and the remaining list as text to copy. Bikers with a wash coming up first.
+  function summarizeBikers(items, now) {
+    const byBiker = new Map();
+    for (const item of items) {
+      if (!item.data || !item.biker || item.cancelled) continue;
+      const biker = byBiker.get(item.biker) || { name: item.bikerName, done: 0, left: [] };
+      byBiker.set(item.biker, biker);
+      if (item.done) biker.done++;
+      else biker.left.push(item);
+    }
+    return [...byBiker.values()]
+      .map(({ name, done, left }) => {
+        left.sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity) || (a.id || 0) - (b.id || 0));
+        const next = left[0];
+        const when = (item) => (item.ts == null ? '—' : fmtTime(item.ts));
+        return {
+          name,
+          done,
+          left: left.length,
+          nextAt: next?.ts ?? null,
+          nextDetail: next ? [when(next), next.zone].filter(Boolean).join(' · ') : null,
+          level: next ? lateLevel(next, now) : null,
+          copy: [
+            TXT.copyHeader(name),
+            ...left.map(
+              (item, i) =>
+                `${i + 1}) ${[when(item), item.zone, item.idText].filter(Boolean).join(' - ')}`,
+            ),
+          ].join('\n'),
+        };
+      })
+      .sort(
+        (a, b) =>
+          (a.left ? 0 : 1) - (b.left ? 0 : 1) ||
+          (a.nextAt ?? Infinity) - (b.nextAt ?? Infinity) ||
+          COLLATOR.compare(a.name, b.name),
+      );
+  }
+
   function applyAll() {
     const now = Date.now();
     lastApplyAt = now;
     const from = param('fromDate');
     const urlDay = from && from === param('toDate') ? parseDate(from) : null;
-    const next = { rows: 0, parsed: 0, past: 0 };
+    const next = emptyStats();
+    let nextBikers = [];
     for (const table of bookingTables()) {
       const tbody = table.tBodies[0];
       if (!tbody) continue;
@@ -434,12 +675,15 @@
       let parsed = 0;
       let past = 0;
       for (const item of items) {
-        const isPast = item.ts != null && now - item.ts > GRACE_MS;
+        // A late "Initiated" booking stays on screen (red) until its status changes.
+        const isPast = item.ts != null && now - item.ts > GRACE_MS && !item.initiated;
         setFlag(item.tr, ATTR_PAST, isPast);
+        markRow(item, now, next);
         if (item.data) rows++;
         if (item.ts != null) parsed++;
         if (isPast) past++;
       }
+      next.fresh += markNew(items, now);
       if (parsed) sortRows(tbody, items);
       if (table.parentElement) {
         const allPast = parsed > 0 && past === rows;
@@ -448,8 +692,10 @@
       next.rows += rows;
       next.parsed += parsed;
       next.past += past;
+      nextBikers = nextBikers.concat(summarizeBikers(items, now));
     }
     stats = next;
+    bikers = nextBikers;
     observer?.takeRecords(); // our own writes must not trigger another pass
     renderPill();
   }
@@ -494,6 +740,8 @@
 
   function onClick(event) {
     if (!onList()) return;
+    // A click anywhere outside the pill closes the bikers panel.
+    if (panelOpen && pill && !event.composedPath().includes(pill.host)) setPanel(false);
     const th = sortableHeader(event.target);
     if (th) return toggleSort(th.getAttribute(ATTR_SORTABLE));
     const item = event.target instanceof Element && event.target.closest('[role="menuitem"]');
@@ -501,6 +749,7 @@
   }
 
   function onKeyDown(event) {
+    if (event.key === 'Escape' && panelOpen) return setPanel(false);
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const th = onList() && sortableHeader(event.target);
     if (!th) return;
@@ -518,7 +767,7 @@
 
   function busyReason(now) {
     const idle = now - lastActivityAt;
-    if (idle < OVERLAY_IDLE_LIMIT_MS && overlayOpen()) return 'overlay';
+    if (idle < OVERLAY_IDLE_LIMIT_MS && (panelOpen || overlayOpen())) return 'overlay';
     if (idle < ACTIVITY_GRACE_MS && now - nextRefreshAt < MAX_ACTIVITY_POSTPONE_MS) {
       return 'activity';
     }
@@ -579,14 +828,22 @@
   // ---------- status pill ----------
 
   const PILL_CSS = `
-    .pill {
-      display: flex; align-items: center; gap: 8px;
-      padding: 6px 14px; border-radius: 999px;
+    .pill, .panel {
       background: var(--popover, #18181b); color: var(--popover-foreground, #fafafa);
       border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
       font: 500 13px/1.5 Tajawal, system-ui, sans-serif;
+      box-sizing: border-box;
+    }
+    /* Two rows: the day at a glance on top, the controls below. */
+    .pill {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      padding: 6px 14px; border-radius: 18px;
+      max-width: calc(100vw - 32px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
       white-space: nowrap; user-select: none;
+    }
+    .row {
+      display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 8px;
     }
     .part { display: inline-flex; align-items: center; gap: 8px; }
     .sep { opacity: 0.5; }
@@ -597,7 +854,28 @@
     }
     button:hover { background: var(--accent, rgba(127, 127, 127, 0.15)); }
     button:focus-visible { outline: 2px solid var(--ring, #f97316); outline-offset: 2px; }
+    button:disabled { opacity: 0.4; cursor: default; }
+    .fresh-text { color: #22c55e; }
     .warn { color: #f59e0b; }
+    .panel {
+      position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+      width: min(600px, calc(100vw - 32px)); max-height: 55vh; overflow: auto;
+      padding: 8px 14px; border-radius: 14px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+    .panel-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding-bottom: 6px; font-weight: 700;
+    }
+    .biker {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+      align-items: center; gap: 12px; padding: 6px 0;
+      border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+    }
+    .biker .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .biker .counts, .biker .next { white-space: nowrap; opacity: 0.85; }
+    .biker.yellow .next { color: #f59e0b; opacity: 1; font-weight: 700; }
+    .biker.red .next { color: #ef4444; opacity: 1; font-weight: 700; }
+    .empty { padding: 8px 0; opacity: 0.7; }
     [hidden] { display: none !important; }
   `;
 
@@ -610,37 +888,127 @@
       'transform: translateX(-50%) !important; z-index: 49 !important; display: block !important;';
     const shadow = host.attachShadow({ mode: 'open' });
     shadow.innerHTML = `<style>${PILL_CSS}</style>
+      <div class="panel" role="dialog" aria-label="${TXT.bikers}" dir="rtl" lang="ar" hidden>
+        <div class="panel-head">
+          <span>${TXT.bikers}</span>
+          <button type="button" class="close" aria-label="${TXT.close}">×</button>
+        </div>
+        <div class="panel-list"></div>
+      </div>
       <div class="pill" dir="rtl" lang="ar">
-        <span class="status"></span>
-        <span class="part past" hidden>
-          <span class="sep">·</span><span class="count"></span>
-          <button type="button" class="toggle" aria-pressed="false"></button>
-        </span>
-        <span class="part sort" hidden>
-          <span class="sep">·</span><span class="sort-text"></span>
-          <button type="button" class="reset"></button>
-        </span>
-        <span class="part warn" hidden><span class="sep">·</span><span class="warn-text"></span></span>
+        <div class="row">
+          <span class="part"><span class="status"></span></span>
+          <span class="part summary" hidden><span class="sep">·</span><span class="summary-text"></span></span>
+          <span class="part late" hidden><span class="sep">·</span><span class="late-text"></span></span>
+          <span class="part fresh" hidden><span class="sep">·</span><span class="fresh-text"></span></span>
+        </div>
+        <div class="row">
+          <span class="part">
+            <button type="button" class="bikers" aria-expanded="false">${TXT.bikers}</button>
+          </span>
+          <span class="part past" hidden>
+            <span class="sep">·</span><span class="count"></span>
+            <button type="button" class="toggle" aria-pressed="false"></button>
+          </span>
+          <span class="part sort" hidden>
+            <span class="sep">·</span><span class="sort-text"></span>
+            <button type="button" class="reset">${TXT.resetSort}</button>
+          </span>
+          <span class="part warn" hidden><span class="sep">·</span><span class="warn-text"></span></span>
+        </div>
       </div>`;
     const find = (selector) => shadow.querySelector(selector);
     pill = {
       host,
+      shadow,
       status: find('.status'),
+      summary: find('.summary'),
+      summaryText: find('.summary-text'),
+      late: find('.late'),
+      lateText: find('.late-text'),
+      fresh: find('.fresh'),
+      freshText: find('.fresh-text'),
       past: find('.past'),
       count: find('.count'),
       toggle: find('.toggle'),
+      bikersButton: find('.bikers'),
       sort: find('.sort'),
       sortText: find('.sort-text'),
-      reset: find('.reset'),
       warn: find('.warn'),
       warnText: find('.warn-text'),
+      panel: find('.panel'),
+      list: find('.panel-list'),
+      panelSignature: null,
     };
+    pill.late.title = TXT.lateTitle;
     pill.toggle.title = TXT.toggleTitle;
     pill.toggle.addEventListener('click', toggleShowPast);
-    pill.reset.textContent = TXT.resetSort;
-    pill.reset.addEventListener('click', () => setSort(DEFAULT_SORT.key, DEFAULT_SORT.dir));
+    pill.bikersButton.addEventListener('click', () => setPanel(!panelOpen));
+    find('.close').addEventListener('click', () => setPanel(false));
+    find('.reset').addEventListener('click', () => setSort(DEFAULT_SORT.key, DEFAULT_SORT.dir));
     document.body.appendChild(host);
     return pill;
+  }
+
+  function setPanel(open) {
+    panelOpen = open;
+    renderPill();
+  }
+
+  // Rebuilt only when its content changes, so a "copied" confirmation isn't wiped by the ticks.
+  function renderPanel(p) {
+    p.panel.hidden = !panelOpen;
+    if (!panelOpen) {
+      p.panelSignature = null;
+      return;
+    }
+    const signature = JSON.stringify(bikers);
+    if (signature === p.panelSignature) return;
+    p.panelSignature = signature;
+    p.list.textContent = '';
+    if (!bikers.length) {
+      p.list.append(make('div', 'empty', TXT.noBikers));
+      return;
+    }
+    for (const biker of bikers) {
+      const copy = make('button', 'copy', TXT.copy);
+      copy.type = 'button';
+      copy.title = TXT.copyTitle;
+      copy.disabled = biker.left === 0;
+      copy.addEventListener('click', () => copyText(biker.copy, copy));
+      // <bdi> keeps "3:15 PM · Wurood" in its own order inside the Arabic line.
+      const next = make('div', 'next', biker.nextDetail ? `${TXT.nextWash} ` : TXT.allDone);
+      if (biker.nextDetail) next.append(make('bdi', null, biker.nextDetail));
+      const row = make('div', `biker ${biker.level || ''}`.trim());
+      row.append(
+        make('div', 'name', biker.name),
+        make('div', 'counts', TXT.bikerCounts(biker.done, biker.left)),
+        next,
+        copy,
+      );
+      p.list.append(row);
+    }
+  }
+
+  async function copyText(text, button) {
+    let ok = false;
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch {
+      // The Clipboard API can refuse (page not focused); the older execCommand route still works.
+      const area = make('textarea');
+      area.value = text;
+      area.style.cssText = 'position: fixed; opacity: 0;';
+      pill.shadow.append(area);
+      area.select();
+      try {
+        ok = document.execCommand('copy');
+      } catch {}
+      area.remove();
+    }
+    button.textContent = ok ? TXT.copied : TXT.copyFailed;
+    setTimeout(() => (button.textContent = TXT.copy), 2000);
   }
 
   function statusText() {
@@ -673,6 +1041,14 @@
     p.host.style.setProperty('display', visible ? 'block' : 'none', 'important');
     if (!visible) return;
     setText(p.status, statusText());
+    p.summary.hidden = stats.total === 0;
+    setText(p.summaryText, TXT.summary(stats));
+    const late = [stats.red && `🔴 ${stats.red}`, stats.yellow && `🟡 ${stats.yellow}`];
+    p.late.hidden = !stats.red && !stats.yellow;
+    setText(p.lateText, late.filter(Boolean).join(' · '));
+    p.fresh.hidden = stats.fresh === 0;
+    setText(p.freshText, TXT.freshCount(stats.fresh));
+    p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
     p.past.hidden = stats.past === 0;
     setText(p.count, `${TXT.pastCount} ${stats.past}`);
     setText(p.toggle, showPast ? TXT.hide : TXT.show);
@@ -683,6 +1059,7 @@
     const list = warnings();
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
+    renderPanel(p);
   }
 
   function toggleShowPast() {

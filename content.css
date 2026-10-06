@@ -39,6 +39,58 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
   unicode-bidi: isolate; /* "2/4" stays "2/4" in the Arabic (rtl) layout too */
 }
 
+/* Still "Initiated" (the biker hasn't set off) close to, or past, the booking time. */
+#root tr[data-swx-late='yellow'] {
+  background-color: rgba(234, 179, 8, 0.16) !important;
+}
+
+#root tr[data-swx-late='red'] {
+  background-color: rgba(239, 68, 68, 0.2) !important;
+}
+
+/* "باقي 8 د" / "متأخرة 25 د" under the booking time. */
+#root [data-swx-late-label]::after {
+  content: attr(data-swx-late-label);
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+#root tr[data-swx-late='yellow'] [data-swx-late-label]::after {
+  color: #f59e0b;
+}
+
+#root tr[data-swx-late='red'] [data-swx-late-label]::after {
+  color: #ef4444;
+}
+
+/* A booking that wasn't there at the earlier refreshes. */
+#root [data-swx-new]::after {
+  content: 'جديد';
+  display: block;
+  width: fit-content;
+  margin-top: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+/* Service time without the portal's long decimals: the original text is hidden, not changed. */
+#root [data-swx-service] {
+  font-size: 0 !important;
+}
+
+#root [data-swx-service]::after {
+  content: attr(data-swx-service);
+  font-size: 0.875rem;
+}
+
 /* Booking Time and Biker headers: the portal can't sort them, the extension can. */
 #root thead th[data-swx-sortable] {
   cursor: pointer;
