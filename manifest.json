@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "مساعد حجوزات سويتر",
+  "short_name": "حجوزات سويتر",
+  "version": "1.0.0",
+  "description": "يخفي الغسلات اللي راح وقتها، يرتّب الحجوزات حسب الوقت، ويحدّث الصفحة كل 10 دقائق.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://ssp-portal.sweater.sa/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start"
+    }
+  ]
+}
