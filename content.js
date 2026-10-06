@@ -27,9 +27,9 @@
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
-  const NEW_BOOKING_SOUND = true; // نغمة الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
+  const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.3.0';
+  const VERSION = '1.3.1';
   const MINUTE = 60 * 1000;
   const REFRESH_MS = REFRESH_MINUTES * MINUTE;
   const GRACE_MS = GRACE_MINUTES * MINUTE;
