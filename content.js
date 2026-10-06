@@ -26,10 +26,12 @@
   const PAGE_SIZE = 50; // عدد الصفوف في الصفحة (50 أكبر خيار يعرضه الموقع)
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
+  const ONWAY_YELLOW_MINUTES = 10; // غسلة لسا في الطريق (On the Way) وباقي هالكم دقيقة أو أقل: أصفر
+  const ONWAY_RED_MINUTES = 5; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
   const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.4.0';
+  const VERSION = '1.5.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -60,6 +62,8 @@
   const DONE_RE = /collect|تحصيل|end_visit|completed|اكتملت/i;
   // Confirmed but the biker hasn't set off yet.
   const INITIATED_RE = /^(initiated|معتمدة)$/i;
+  // The biker has set off but hasn't reached the customer yet.
+  const ON_WAY_RE = /^(on the way|on_way|في الطريق)$/i;
   // The portal's empty table (as opposed to its loading or error row).
   const EMPTY_RE = /no bookings found|لم يتم العثور على حجوزات/i;
   const SORT_KEYS = ['time', 'biker', 'zone', 'id', 'service'];
@@ -109,7 +113,9 @@
       `الغسلات: ${s.total} · خلصت ${s.done} · باقي ${s.remaining} · ملغية ${s.cancelled}`,
     lateTitle:
       `غسلات لسا Initiated: 🔴 باقي ${LATE_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
-      ` 🟡 باقي ${LATE_YELLOW_MINUTES} دقيقة أو أقل`,
+      ` 🟡 باقي ${LATE_YELLOW_MINUTES} دقيقة أو أقل.\n` +
+      `غسلات لسا في الطريق: 🔴 باقي ${ONWAY_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
+      ` 🟡 باقي ${ONWAY_YELLOW_MINUTES} دقائق أو أقل`,
     freshCount: (n) => `جديدة ${n}`,
     minutesLeft: (n) => `باقي ${duration(n)}`,
     minutesLate: (n) => `متأخرة ${duration(n)}`,
@@ -487,6 +493,7 @@
       cancelled: CANCELLED_RE.test(status),
       done: DONE_RE.test(status),
       initiated: INITIATED_RE.test(status),
+      onWay: ON_WAY_RE.test(status),
       zone: text('zone'),
       serviceText: text('service'),
       service: serviceMinutes(text('service')),
@@ -570,12 +577,21 @@
     });
   }
 
-  // "Initiated" (the biker hasn't set off) close to or past the booking time: yellow, then red.
+  // [yellow, red] minutes before the booking time, for the statuses that haven't reached the
+  // customer yet: "Initiated" (the biker hasn't set off) and "On the Way".
+  function lateLimits(item) {
+    if (item.initiated) return [LATE_YELLOW_MINUTES, LATE_RED_MINUTES];
+    if (item.onWay) return [ONWAY_YELLOW_MINUTES, ONWAY_RED_MINUTES];
+    return null;
+  }
+
+  // Close to or past the booking time and the biker isn't there yet: yellow, then red.
   function lateLevel(item, now) {
-    if (!item.initiated || item.ts == null) return null;
+    const limits = lateLimits(item);
+    if (!limits || item.ts == null) return null;
     const left = (item.ts - now) / MINUTE;
-    if (left <= LATE_RED_MINUTES) return 'red';
-    return left <= LATE_YELLOW_MINUTES ? 'yellow' : null;
+    if (left <= limits[1]) return 'red';
+    return left <= limits[0] ? 'yellow' : null;
   }
 
   function lateLabel(item, now) {
@@ -727,8 +743,8 @@
       let parsed = 0;
       let past = 0;
       for (const item of items) {
-        // A late "Initiated" booking stays on screen (red) until its status changes.
-        const isPast = item.ts != null && now - item.ts > GRACE_MS && !item.initiated;
+        // A late booking the biker hasn't reached yet stays on screen (red) until its status changes.
+        const isPast = item.ts != null && now - item.ts > GRACE_MS && !lateLimits(item);
         setFlag(item.tr, ATTR_PAST, isPast);
         markRow(item, now, next);
         if (item.data) rows++;

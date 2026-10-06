@@ -39,7 +39,7 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
   unicode-bidi: isolate; /* "2/4" stays "2/4" in the Arabic (rtl) layout too */
 }
 
-/* Still "Initiated" (the biker hasn't set off) close to, or past, the booking time. */
+/* Still "Initiated" or "On the Way" (the biker isn't there yet) close to, or past, the booking time. */
 #root tr[data-swx-late='yellow'] {
   background-color: rgba(234, 179, 8, 0.16) !important;
 }
