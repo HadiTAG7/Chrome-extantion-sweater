@@ -2,10 +2,11 @@
  * مساعد حجوزات سويتر (Sweater bookings helper)
  *
  * Runs on https://ssp-portal.sweater.sa/bookings and:
- *   - hides bookings whose slot started more than GRACE_MINUTES ago,
+ *   - hides finished washes, and cancelled bookings GRACE_MINUTES after their slot; a wash that
+ *     isn't finished stays on screen whatever the time,
  *   - sorts the rows by booking time (default) or by the column picked in a header,
  *   - shows each biker's wash number of the day under the name ("2/4"),
- *   - colours "Initiated" bookings close to (or past) their time yellow / red,
+ *   - colours "Initiated" and "On the Way" bookings close to (or past) their time yellow / red,
  *   - marks bookings that appeared since the last refreshes as new, with a Windows notification,
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
  *   - reloads the page every few minutes (set from the pill; follows "today" past midnight),
@@ -22,7 +23,7 @@
 
   // ===== الإعدادات: عدّلها هنا ثم اضغط زر التحديث ↻ على الإضافة في chrome://extensions =====
   const REFRESH_MINUTES = 5; // كل كم دقيقة تتحدّث الصفحة (افتراضياً، وتقدر تغيّره من الشريط)
-  const GRACE_MINUTES = 30; // الغسلة تختفي بعد موعدها بكم دقيقة
+  const GRACE_MINUTES = 30; // الغسلة الملغية تختفي بعد موعدها بكم دقيقة (اللي خلصت تختفي على طول)
   const PAGE_SIZE = 50; // عدد الصفوف في الصفحة (50 أكبر خيار يعرضه الموقع)
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
@@ -31,7 +32,7 @@
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
   const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.5.0';
+  const VERSION = '1.6.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -94,11 +95,11 @@
     busyActivity: 'التحديث مؤجل — استخدام حالي',
     refreshing: 'جارٍ التحديث…',
     offline: 'لا يوجد اتصال — إعادة المحاولة بعد قليل',
-    pastCount: 'الغسلات السابقة:',
+    pastCount: 'الغسلات المخفية:',
     show: 'إظهار',
     hide: 'إخفاء',
-    toggleTitle: `إظهار أو إخفاء الغسلات اللي عدى على موعدها أكثر من ${GRACE_MINUTES} دقيقة`,
-    noUpcoming: 'لا توجد غسلات قادمة',
+    toggleTitle: `إظهار أو إخفاء الغسلات اللي خلصت، والملغية اللي عدى موعدها أكثر من ${GRACE_MINUTES} دقيقة`,
+    noUpcoming: 'لا توجد غسلات باقية',
     sortedBy: 'الترتيب:',
     resetSort: 'رجوع للوقت',
     sortNames: {
@@ -538,7 +539,7 @@
   }
 
   // "2/4" next to the biker: the booking's place among that biker's washes of the day, counting
-  // every row of the table (hidden past ones too) except cancelled ones.
+  // every row of the table (hidden ones too) except cancelled ones.
   function markSequence(items) {
     const groups = new Map();
     for (const item of items) {
@@ -583,6 +584,16 @@
     if (item.initiated) return [LATE_YELLOW_MINUTES, LATE_RED_MINUTES];
     if (item.onWay) return [ONWAY_YELLOW_MINUTES, ONWAY_RED_MINUTES];
     return null;
+  }
+
+  // Off the screen: a finished wash right away, a cancelled one GRACE_MINUTES after its slot.
+  // A wash that isn't finished (on the way, washing...) stays, however late. Without a Status
+  // column only the time is known, so then it's GRACE_MINUTES after the slot for every row.
+  function isHidden(item, now, hasStatus) {
+    if (!item.data) return false;
+    if (item.done) return true;
+    const past = item.ts != null && now - item.ts > GRACE_MS;
+    return past && (item.cancelled || !hasStatus);
   }
 
   // Close to or past the booking time and the biker isn't there yet: yellow, then red.
@@ -739,23 +750,23 @@
       markHeaders(table, cols);
       const items = Array.from(tbody.rows, (tr) => rowInfo(tr, cols, urlDay));
       markSequence(items);
+      const hasStatus = cols.status >= 0;
       let rows = 0;
       let parsed = 0;
       let past = 0;
       for (const item of items) {
-        // A late booking the biker hasn't reached yet stays on screen (red) until its status changes.
-        const isPast = item.ts != null && now - item.ts > GRACE_MS && !lateLimits(item);
-        setFlag(item.tr, ATTR_PAST, isPast);
+        const hidden = isHidden(item, now, hasStatus);
+        setFlag(item.tr, ATTR_PAST, hidden);
         markRow(item, now, next);
         if (item.data) rows++;
         if (item.ts != null) parsed++;
-        if (isPast) past++;
+        if (hidden) past++;
       }
       next.fresh += markNew(items, now);
       if (parsed) sortRows(tbody, items);
       if (table.parentElement) {
-        const allPast = parsed > 0 && past === rows;
-        setValue(table.parentElement, ATTR_EMPTY, allPast ? TXT.noUpcoming : null);
+        const allHidden = rows > 0 && past === rows;
+        setValue(table.parentElement, ATTR_EMPTY, allHidden ? TXT.noUpcoming : null);
       }
       next.rows += rows;
       next.parsed += parsed;
@@ -1228,7 +1239,7 @@
   if (wasOnList) noteTrackedDay();
 
   // Rows arrive and change long after load (the table is fetched and re-rendered by React).
-  // Handling mutations synchronously hides past rows before they are ever painted.
+  // Handling mutations synchronously hides rows before they are ever painted.
   observer = new MutationObserver(() => {
     safe(() => {
       checkRoute();

@@ -1,16 +1,16 @@
 /* مساعد حجوزات سويتر: content.js marks the rows, these rules show or hide them. */
 
-/* Bookings whose slot started more than GRACE_MINUTES ago. */
+/* Finished washes, and cancelled bookings whose slot started more than GRACE_MINUTES ago. */
 html:not([data-swx-show-past]) tr[data-swx-past] {
   display: none !important;
 }
 
-/* "Show past" toggled on from the pill: keep them visible but dimmed. */
+/* "Show" toggled on from the pill: keep them visible but dimmed. */
 html[data-swx-show-past] tr[data-swx-past] {
   opacity: 0.45;
 }
 
-/* Every booking on the page is past: say so under the table instead of showing an empty body. */
+/* Every booking on the page is hidden: say so under the table instead of showing an empty body. */
 html:not([data-swx-show-past]) [data-swx-empty]::after {
   content: attr(data-swx-empty);
   display: block;
