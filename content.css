@@ -39,30 +39,40 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
   unicode-bidi: isolate; /* "2/4" stays "2/4" in the Arabic (rtl) layout too */
 }
 
-/* Still "Initiated" or "On the Way" (the biker isn't there yet) close to, or past, the booking time. */
-#root tr[data-swx-late='yellow'] {
+/* Still "Initiated" or "On the Way" (the biker isn't there yet) close to, or past, the booking
+   time: yellow, then red. Washing: green, then yellow and red when the wash runs long. */
+#root tr[data-swx-tone='green'] {
+  background-color: rgba(34, 197, 94, 0.16) !important;
+}
+
+#root tr[data-swx-tone='yellow'] {
   background-color: rgba(234, 179, 8, 0.16) !important;
 }
 
-#root tr[data-swx-late='red'] {
+#root tr[data-swx-tone='red'] {
   background-color: rgba(239, 68, 68, 0.2) !important;
 }
 
-/* "باقي 8 د" / "متأخرة 25 د" under the booking time. */
-#root [data-swx-late-label]::after {
-  content: attr(data-swx-late-label);
+/* "باقي 8 د" / "متأخرة 25 د" / "يغسل 47:12" under the booking time. */
+#root [data-swx-note]::after {
+  content: attr(data-swx-note);
   display: block;
   font-size: 11px;
   font-weight: 700;
   line-height: 14px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums; /* the ticking timer keeps its width */
 }
 
-#root tr[data-swx-late='yellow'] [data-swx-late-label]::after {
+#root tr[data-swx-tone='green'] [data-swx-note]::after {
+  color: #16a34a;
+}
+
+#root tr[data-swx-tone='yellow'] [data-swx-note]::after {
   color: #f59e0b;
 }
 
-#root tr[data-swx-late='red'] [data-swx-late-label]::after {
+#root tr[data-swx-tone='red'] [data-swx-note]::after {
   color: #ef4444;
 }
 

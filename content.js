@@ -7,6 +7,7 @@
  *   - sorts the rows by booking time (default) or by the column picked in a header,
  *   - shows each biker's wash number of the day under the name ("2/4"),
  *   - colours "Initiated" and "On the Way" bookings close to (or past) their time yellow / red,
+ *   - times the washes in progress (green, then yellow / red when they run long),
  *   - marks bookings that appeared since the last refreshes as new, with a Windows notification,
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
  *   - reloads the page every few minutes (set from the pill; follows "today" past midnight),
@@ -29,15 +30,22 @@
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
   const ONWAY_YELLOW_MINUTES = 10; // غسلة لسا في الطريق (On the Way) وباقي هالكم دقيقة أو أقل: أصفر
   const ONWAY_RED_MINUTES = 5; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
+  const WASH_YELLOW_MINUTES = 60; // غسلة بدأ غسيلها: خضراء، ولما يصير له يغسل هالكم دقيقة: صفراء
+  const WASH_RED_MINUTES = 70; // ولما يصير له يغسل هالكم دقيقة: حمراء
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
   const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.6.0';
+  const VERSION = '1.7.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
   const GRACE_MS = GRACE_MINUTES * MINUTE;
   const NEW_BADGE_MS = NEW_BADGE_MINUTES * MINUTE;
+  // The portal's own backend: a booking's details say when its wash started.
+  const API_BASE = 'https://ssp-portal-backend.sweater.sa/api';
+  const API_TIMEOUT_MS = 10 * 1000;
+  const API_RETRY_MS = 2 * MINUTE; // a booking whose start time couldn't be read is asked again
+  const WASH_KEEP_MS = 24 * 60 * MINUTE; // wash start times are forgotten after a day
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
   const ACTIVITY_GRACE_MS = MINUTE; // no reload within a minute of a click, key or scroll...
   const MAX_ACTIVITY_POSTPONE_MS = 2 * MINUTE; // ...unless the reload is already this late
@@ -65,6 +73,8 @@
   const INITIATED_RE = /^(initiated|معتمدة)$/i;
   // The biker has set off but hasn't reached the customer yet.
   const ON_WAY_RE = /^(on the way|on_way|في الطريق)$/i;
+  // Washing now: the timer runs from the start of the service.
+  const WASHING_RE = /^(washing started|start_wash|بدأ الغسيل)$/i;
   // The portal's empty table (as opposed to its loading or error row).
   const EMPTY_RE = /no bookings found|لم يتم العثور على حجوزات/i;
   const SORT_KEYS = ['time', 'biker', 'zone', 'id', 'service'];
@@ -84,8 +94,8 @@
   const ATTR_EMPTY = 'data-swx-empty';
   const ATTR_SEQ = 'data-swx-seq';
   const ATTR_SORTABLE = 'data-swx-sortable';
-  const ATTR_LATE = 'data-swx-late';
-  const ATTR_LATE_LABEL = 'data-swx-late-label';
+  const ATTR_TONE = 'data-swx-tone'; // row colour: green, yellow or red
+  const ATTR_NOTE = 'data-swx-note'; // the line under the booking time
   const ATTR_NEW = 'data-swx-new';
   const ATTR_SERVICE = 'data-swx-service';
 
@@ -116,11 +126,19 @@
       `غسلات لسا Initiated: 🔴 باقي ${LATE_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
       ` 🟡 باقي ${LATE_YELLOW_MINUTES} دقيقة أو أقل.\n` +
       `غسلات لسا في الطريق: 🔴 باقي ${ONWAY_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
-      ` 🟡 باقي ${ONWAY_YELLOW_MINUTES} دقائق أو أقل`,
+      ` 🟡 باقي ${ONWAY_YELLOW_MINUTES} دقائق أو أقل.\n` +
+      `غسلات بدأ غسيلها: 🟢 من البداية، 🟡 بعد ${duration(WASH_YELLOW_MINUTES)}،` +
+      ` 🔴 بعد ${duration(WASH_RED_MINUTES)}`,
     freshCount: (n) => `جديدة ${n}`,
     minutesLeft: (n) => `باقي ${duration(n)}`,
     minutesLate: (n) => `متأخرة ${duration(n)}`,
     dueNow: 'حان موعدها',
+    washing: (clock, exact) => `يغسل ${exact ? '' : '≈'}${clock}`,
+    washTitle: (time, exact) =>
+      exact
+        ? `بدأ الغسيل ${time}`
+        : `بدأ الغسيل تقريباً ${time} (أول ما شافته الإضافة، لأن تفاصيل الحجز ما انقرت)`,
+    washingNow: 'يغسل الحين',
     bikers: 'البايكرية',
     close: 'إغلاق',
     bikerCounts: (done, left) => `خلّص ${done} · باقي ${left}`,
@@ -184,6 +202,9 @@
   let sort = loadSort();
   let stats = emptyStats();
   let bikers = []; // per-biker summaries for the panel
+  let washingRows = []; // the rows being washed at the last pass, for the timers' ticks
+  let washStarts = null; // see washStart(); loaded on first use
+  const startRequests = new Map(); // booking → when its start time was last asked for
   let panelOpen = false; // the bikers panel
   let editorOpen = false; // the refresh interval editor
   let lastHref = '';
@@ -265,6 +286,21 @@
     return h ? `${h} س${m ? ` ${m} د` : ''}` : `${m} د`;
   }
 
+  // "7:05" or "1:02:09", like a stopwatch: how long a wash has been going.
+  function stopwatch(ms) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const rest = `${pad(m)}:${pad(seconds % 60)}`;
+    return h ? `${h}:${rest}` : rest.replace(/^0/, '');
+  }
+
+  // A cookie as the portal writes and reads it (raw, not URI-encoded).
+  function cookie(name) {
+    const entry = document.cookie.split('; ').find((part) => part.startsWith(`${name}=`));
+    return entry ? entry.slice(name.length + 1) : null;
+  }
+
   function emptyStats() {
     return {
       rows: 0,
@@ -276,6 +312,7 @@
       cancelled: 0,
       red: 0,
       yellow: 0,
+      green: 0,
       fresh: 0,
     };
   }
@@ -495,6 +532,7 @@
       done: DONE_RE.test(status),
       initiated: INITIATED_RE.test(status),
       onWay: ON_WAY_RE.test(status),
+      washing: WASHING_RE.test(status),
       zone: text('zone'),
       serviceText: text('service'),
       service: serviceMinutes(text('service')),
@@ -605,6 +643,12 @@
     return left <= limits[0] ? 'yellow' : null;
   }
 
+  // The colour of a row (for the bikers panel): its wash timer, or how late it is.
+  function rowTone(item, now) {
+    if (!item.washing) return lateLevel(item, now);
+    return item.start ? washTone(item.start, now) : 'green';
+  }
+
   function lateLabel(item, now) {
     const left = Math.ceil((item.ts - now) / MINUTE);
     if (left > 0) return TXT.minutesLeft(left);
@@ -612,18 +656,137 @@
     return late > 0 ? TXT.minutesLate(late) : TXT.dueNow;
   }
 
-  // Per row: day summary counts, late colour and label, rounded service time.
-  function markRow(item, now, counts) {
+  // ---------- washes in progress ----------
+
+  // When each wash started, by booking number: { at, exact, saved }. Exact is the start of the
+  // service from the booking's details; until those are read it's when this browser first saw
+  // the booking washing. Kept in memory (the storage can be blocked) and in the storage for the
+  // other tabs and the next loads; an entry is forgotten a day after it was saved.
+  function loadWashStarts() {
+    try {
+      const starts = JSON.parse(prefs.get('washStarts') || '{}');
+      return starts && typeof starts === 'object' ? starts : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function setWashStart(id, start, now) {
+    washStarts[id] = start;
+    const all = loadWashStarts(); // what the other tabs saved meanwhile
+    for (const [key, mine] of Object.entries(washStarts)) {
+      const theirs = all[key];
+      if (!theirs?.exact && (mine.exact || !(theirs?.at <= mine.at))) all[key] = mine;
+    }
+    for (const [key, entry] of Object.entries(all)) {
+      if (!(now - entry?.saved < WASH_KEEP_MS)) delete all[key];
+    }
+    washStarts = all;
+    prefs.set('washStarts', JSON.stringify(all));
+  }
+
+  function washStart(item, now) {
+    washStarts ??= loadWashStarts();
+    let start = washStarts[item.id];
+    if (!start) {
+      start = { at: now, exact: false, saved: now };
+      setWashStart(item.id, start, now);
+    }
+    if (!start.exact) requestStart(item.id);
+    return start;
+  }
+
+  // Reads the exact start in the background, then redraws. Asked at most every API_RETRY_MS per
+  // booking: a failure keeps the first-seen time until the next try.
+  function requestStart(id) {
+    const last = startRequests.get(id);
+    if (last != null && Date.now() - last < API_RETRY_MS) return;
+    startRequests.set(id, Date.now());
+    fetchStart(id)
+      .then((at) => {
+        if (at == null) return;
+        const now = Date.now();
+        setWashStart(id, { at, exact: true, saved: now }, now);
+        if (onList()) safe(applyAll);
+      })
+      .catch(() => {});
+  }
+
+  // The request the portal's "View Details" makes, with its login (its cookies): only the start
+  // of the service is kept from the answer.
+  async function fetchStart(id) {
+    const token = cookie('access_token');
+    if (!token) return null;
+    const headers = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Accept-Language': cookie('lang') || 'en',
+    };
+    const provider = cookie('selected_service_provider');
+    if (provider) headers['X-Service-Provider-Id'] = provider;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${API_BASE}/Bookings/${id}`, {
+        headers,
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const body = await response.json();
+      const value = body?.data?.timeline?.startServiceTime;
+      const at = value ? new Date(value).getTime() : NaN; // parsed like the portal shows it
+      return Number.isFinite(at) && at <= Date.now() + MINUTE ? at : null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // Green while washing, yellow after WASH_YELLOW_MINUTES, red after WASH_RED_MINUTES.
+  function washTone(start, now) {
+    const minutes = (now - start.at) / MINUTE;
+    if (minutes >= WASH_RED_MINUTES) return 'red';
+    return minutes >= WASH_YELLOW_MINUTES ? 'yellow' : 'green';
+  }
+
+  // The washing row's colour and timer, also run every second between the passes.
+  function markWashing(item, start, now) {
+    setValue(item.tr, ATTR_TONE, washTone(start, now));
+    const time = inner(item.timeCell);
+    if (!time) return;
+    setValue(time, ATTR_NOTE, TXT.washing(stopwatch(now - start.at), start.exact));
+    setValue(time, 'title', TXT.washTitle(fmtTime(start.at), start.exact));
+  }
+
+  function tickWashing(now) {
+    for (const { item, start } of washingRows) {
+      if (item.tr.isConnected) markWashing(item, start, now);
+    }
+  }
+
+  // Per row: day summary counts, colour and the line under the time, rounded service time.
+  function markRow(item, now, counts, washing) {
     if (!item.data) return;
     counts.total++;
     if (item.cancelled) counts.cancelled++;
     else if (item.done) counts.done++;
     else counts.remaining++;
-    const level = lateLevel(item, now);
-    if (level) counts[level]++;
-    setValue(item.tr, ATTR_LATE, level);
     const time = inner(item.timeCell);
-    if (time) setValue(time, ATTR_LATE_LABEL, level ? lateLabel(item, now) : null);
+    if (item.washing && item.id != null) {
+      const start = washStart(item, now);
+      item.start = start;
+      washing.push({ item, start });
+      markWashing(item, start, now);
+      counts[washTone(start, now)]++;
+    } else {
+      const level = lateLevel(item, now);
+      if (level) counts[level]++;
+      setValue(item.tr, ATTR_TONE, level);
+      if (time) {
+        setValue(time, ATTR_NOTE, level ? lateLabel(item, now) : null);
+        setValue(time, 'title', null);
+      }
+    }
     const service = inner(item.serviceCell);
     if (service) {
       const rounded = item.service == null ? null : fmtMinutes(item.service);
@@ -718,7 +881,8 @@
           left: left.length,
           nextAt: next?.ts ?? null,
           nextDetail: next ? [when(next), next.zone].filter(Boolean).join(' · ') : null,
-          level: next ? lateLevel(next, now) : null,
+          washing: Boolean(next?.washing),
+          level: next ? rowTone(next, now) : null,
           copy: [
             TXT.copyHeader(name),
             ...left.map(
@@ -742,6 +906,7 @@
     const from = param('fromDate');
     const urlDay = from && from === param('toDate') ? parseDate(from) : null;
     const next = emptyStats();
+    const nextWashing = [];
     let nextBikers = [];
     for (const table of bookingTables()) {
       const tbody = table.tBodies[0];
@@ -757,7 +922,7 @@
       for (const item of items) {
         const hidden = isHidden(item, now, hasStatus);
         setFlag(item.tr, ATTR_PAST, hidden);
-        markRow(item, now, next);
+        markRow(item, now, next, nextWashing);
         if (item.data) rows++;
         if (item.ts != null) parsed++;
         if (hidden) past++;
@@ -775,6 +940,7 @@
     }
     stats = next;
     bikers = nextBikers;
+    washingRows = nextWashing;
     observer?.takeRecords(); // our own writes must not trigger another pass
     renderPill();
   }
@@ -894,6 +1060,7 @@
       if (onList()) {
         const now = Date.now();
         if (now - lastApplyAt >= REAPPLY_MS) applyAll();
+        else tickWashing(now);
         if (!reloading && now >= nextRefreshAt) {
           const reason = busyReason(now);
           if (reason) phase = reason;
@@ -956,6 +1123,7 @@
     .biker .counts, .biker .next { white-space: nowrap; opacity: 0.85; }
     .biker.yellow .next { color: #f59e0b; opacity: 1; font-weight: 700; }
     .biker.red .next { color: #ef4444; opacity: 1; font-weight: 700; }
+    .biker.green .next { color: #16a34a; opacity: 1; font-weight: 700; }
     .empty { padding: 8px 0; opacity: 0.7; }
     /* The countdown doubles as the button that opens the refresh editor. */
     .status { border: 0; padding: 0; border-radius: 4px; }
@@ -1112,7 +1280,8 @@
       copy.disabled = biker.left === 0;
       copy.addEventListener('click', () => copyText(biker.copy, copy));
       // <bdi> keeps "3:15 PM · Wurood" in its own order inside the Arabic line.
-      const next = make('div', 'next', biker.nextDetail ? `${TXT.nextWash} ` : TXT.allDone);
+      const label = biker.washing ? TXT.washingNow : TXT.nextWash;
+      const next = make('div', 'next', biker.nextDetail ? `${label} ` : TXT.allDone);
       if (biker.nextDetail) next.append(make('bdi', null, biker.nextDetail));
       const row = make('div', `biker ${biker.level || ''}`.trim());
       row.append(
@@ -1181,8 +1350,12 @@
     p.editor.hidden = !editorOpen;
     p.summary.hidden = stats.total === 0;
     setText(p.summaryText, TXT.summary(stats));
-    const late = [stats.red && `🔴 ${stats.red}`, stats.yellow && `🟡 ${stats.yellow}`];
-    p.late.hidden = !stats.red && !stats.yellow;
+    const late = [
+      stats.red && `🔴 ${stats.red}`,
+      stats.yellow && `🟡 ${stats.yellow}`,
+      stats.green && `🟢 ${stats.green}`,
+    ];
+    p.late.hidden = !stats.red && !stats.yellow && !stats.green;
     setText(p.lateText, late.filter(Boolean).join(' · '));
     p.fresh.hidden = stats.fresh === 0;
     setText(p.freshText, TXT.freshCount(stats.fresh));
