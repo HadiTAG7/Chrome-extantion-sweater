@@ -76,8 +76,10 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
   color: #ef4444;
 }
 
-/* A booking that wasn't there at the earlier refreshes. */
-#root [data-swx-new]::after {
+/* A booking that wasn't there at the earlier refreshes, or that was cancelled since (red, and it
+   wins when both apply to the same booking). */
+#root [data-swx-new]::after,
+#root [data-swx-cancelled]::after {
   content: 'جديد';
   display: block;
   width: fit-content;
@@ -89,6 +91,11 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
   font-size: 11px;
   font-weight: 700;
   line-height: 16px;
+}
+
+#root [data-swx-cancelled]::after {
+  content: 'ألغي';
+  background: #dc2626;
 }
 
 /* Service time without the portal's long decimals: the original text is hidden, not changed. */

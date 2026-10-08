@@ -9,12 +9,15 @@
  *   - colours "Initiated" and "On the Way" bookings close to (or past) their time yellow / red,
  *     and "Reached" ones (the biker is there but hasn't started) red once their time comes,
  *   - times the washes in progress (green, then yellow / red when they run long),
- *   - marks bookings that appeared since the last refreshes as new, with a Windows notification,
+ *   - marks bookings that appeared or were cancelled since the last refreshes, with a Windows
+ *     notification and a sound, and alerts (once) when a booking turns red; the red count also
+ *     shows in the tab's title,
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
  *   - reloads the page every few minutes (set from the pill; follows "today" past midnight),
  *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
- *   - shows a status pill at the bottom of the page: countdown, day summary, a per-biker panel
- *     (with a copy-for-WhatsApp button) and the controls.
+ *   - shows a status pill at the bottom of the page: countdown (and a refresh-now button), day
+ *     summary, a live per-biker panel (what each one is doing now, what's next, a copy-for-WhatsApp
+ *     button) and the controls.
  *
  * The portal is a React SPA whose table rows are keyed by index: React rewrites the text of
  * existing <tr>s in place. So every pass re-reads the rows from their text, rows are never
@@ -36,8 +39,11 @@
   const WASH_RED_MINUTES = 70; // ولما يصير له يغسل هالكم دقيقة: حمراء
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
   const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
+  const RED_ALERTS = true; // تنبيه (إشعار وصوت) لما غسلة تصير حمراء، مرة وحدة لكل غسلة
+  const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
+  const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.8.0';
+  const VERSION = '1.9.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -48,6 +54,7 @@
   const API_TIMEOUT_MS = 10 * 1000;
   const API_RETRY_MS = 2 * MINUTE; // a booking whose start time couldn't be read is asked again
   const WASH_KEEP_MS = 24 * 60 * MINUTE; // wash start times are forgotten after a day
+  const ALERT_KEEP_MS = 24 * 60 * MINUTE; // and so are the red alerts already given
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
   const ACTIVITY_GRACE_MS = MINUTE; // no reload within a minute of a click, key or scroll...
   const MAX_ACTIVITY_POSTPONE_MS = 2 * MINUTE; // ...unless the reload is already this late
@@ -56,6 +63,7 @@
   const PROBE_TIMEOUT_MS = 8 * 1000;
   const SPA_FIX_GUARD_MS = 30 * 1000;
   const RIYADH_TZ_OFFSET = -180; // Date#getTimezoneOffset() in Saudi Arabia (UTC+3, no DST)
+  const TITLE_PREFIX_RE = /^🔴 \d+ · /; // the red count this script puts before the tab's title
 
   const LIST_PATH_RE = /^\/bookings\/?$/;
   const HEADERS = {
@@ -101,6 +109,7 @@
   const ATTR_TONE = 'data-swx-tone'; // row colour: green, yellow or red
   const ATTR_NOTE = 'data-swx-note'; // the line under the booking time
   const ATTR_NEW = 'data-swx-new';
+  const ATTR_CANCELLED = 'data-swx-cancelled';
   const ATTR_SERVICE = 'data-swx-service';
 
   const TXT = {
@@ -108,6 +117,8 @@
     busyOverlay: 'التحديث مؤجل — نافذة مفتوحة',
     busyActivity: 'التحديث مؤجل — استخدام حالي',
     refreshing: 'جارٍ التحديث…',
+    refreshNow: '↻ حدّث الحين',
+    refreshNowTitle: 'حدّث الصفحة الحين بدون ما تنتظر العد',
     offline: 'لا يوجد اتصال — إعادة المحاولة بعد قليل',
     pastCount: 'الغسلات المخفية:',
     show: 'إظهار',
@@ -145,7 +156,10 @@
       exact
         ? `بدأ الغسيل ${time}`
         : `بدأ الغسيل تقريباً ${time} (أول ما شافته الإضافة، لأن تفاصيل الحجز ما انقرت)`,
-    washingNow: 'يغسل الحين',
+    washingFor: (minutes) => `يغسل من ${duration(minutes)}`,
+    reachedNow: 'وصل',
+    onWayNow: 'في الطريق',
+    idle: 'فاضي',
     bikers: 'البايكرية',
     close: 'إغلاق',
     bikerCounts: (done, left) => `خلّص ${done} · باقي ${left}`,
@@ -535,6 +549,7 @@
       bikerName: norm(bikerCell?.querySelector('span')?.textContent) || text('biker'),
       timeCell: cell('time'),
       serviceCell: cell('service'),
+      statusText: status,
       cancelled: CANCELLED_RE.test(status),
       done: DONE_RE.test(status),
       initiated: INITIATED_RE.test(status),
@@ -786,16 +801,16 @@
       item.start = start;
       washing.push({ item, start });
       markWashing(item, start, now);
-      counts[washTone(start, now)]++;
+      item.tone = washTone(start, now);
     } else {
-      const level = lateLevel(item, now);
-      if (level) counts[level]++;
-      setValue(item.tr, ATTR_TONE, level);
+      item.tone = lateLevel(item, now);
+      setValue(item.tr, ATTR_TONE, item.tone);
       if (time) {
-        setValue(time, ATTR_NOTE, level ? lateLabel(item, now) : null);
+        setValue(time, ATTR_NOTE, item.tone ? lateLabel(item, now) : null);
         setValue(time, 'title', null);
       }
     }
+    if (item.tone) counts[item.tone]++;
     const service = inner(item.serviceCell);
     if (service) {
       const rounded = item.service == null ? null : fmtMinutes(item.service);
@@ -834,7 +849,7 @@
     if (fresh.length) {
       for (const item of fresh) seen[item.id] = now;
       store.set(storeKey, JSON.stringify(seen));
-      notifyNew(fresh);
+      notify('swx:new-bookings', fresh, bookingLine, NEW_BOOKING_SOUND);
     }
     let count = 0;
     for (const item of bookings) {
@@ -845,31 +860,117 @@
     return count;
   }
 
-  // background.js turns this into the chime and the Windows notification. Without the extension
+  // Bookings that were cancelled since the earlier loads of this view (this tab): "ألغي" for
+  // NEW_BADGE_MINUTES, plus one Windows notification per batch, like the new ones. A booking seen
+  // for the first time (the first table of a view, or a new booking) is only recorded.
+  function markCancelled(items, now) {
+    const bookings = items.filter((item) => item.data && item.id != null);
+    if (!bookings.length) return; // loading or error row: nothing to compare yet
+    const storeKey = `cancel:${viewKey()}`;
+    let known = null;
+    try {
+      known = JSON.parse(store.get(storeKey) || 'null');
+    } catch {}
+    known ||= {};
+    const fresh = [];
+    let changed = false;
+    for (const item of bookings) {
+      const was = known[item.id];
+      const cancelled = item.cancelled ? 1 : 0;
+      if (was && was.c === cancelled) continue;
+      known[item.id] = was && cancelled ? { c: 1, at: now } : { c: cancelled };
+      if (was && cancelled) fresh.push(item);
+      changed = true;
+    }
+    if (changed) store.set(storeKey, JSON.stringify(known));
+    if (fresh.length) {
+      const line = (item) => `${bookingLine(item)} — ${item.statusText}`;
+      notify('swx:cancelled', fresh, line, CANCEL_ALERT_SOUND);
+    }
+    for (const item of bookings) {
+      const at = known[item.id]?.at;
+      setFlag(inner(item.idCell), ATTR_CANCELLED, at > 0 && now - at < NEW_BADGE_MS);
+    }
+  }
+
+  // Bookings that turned red (late, or washing too long): one notification with the beep per
+  // batch, once per booking for being late and once for a long wash. Today's bookings only. The
+  // ones already told are kept for this tab, so the automatic reloads don't repeat them.
+  function alertRed(items, now) {
+    if (!RED_ALERTS) return;
+    const today = ymd(now);
+    const red = items.filter(
+      (item) => item.tone === 'red' && item.id != null && item.ts != null && ymd(item.ts) === today,
+    );
+    if (!red.length) return;
+    let told = {};
+    try {
+      told = JSON.parse(store.get('redAlerts') || '{}') || {};
+    } catch {}
+    const key = (item) => `${item.id}:${item.washing ? 'wash' : 'late'}`;
+    const fresh = red.filter((item) => !(key(item) in told));
+    if (!fresh.length) return;
+    for (const item of fresh) told[key(item)] = now;
+    for (const [entry, at] of Object.entries(told)) {
+      if (!(now - at < ALERT_KEEP_MS)) delete told[entry];
+    }
+    store.set('redAlerts', JSON.stringify(told));
+    const reason = (item) =>
+      item.washing
+        ? TXT.washing(stopwatch(now - item.start.at), item.start.exact)
+        : `${item.statusText} · ${lateLabel(item, now)}`;
+    const line = (item) => `${bookingLine(item, false)} — ${reason(item)}`;
+    notify('swx:red-alert', fresh, line, RED_ALERT_SOUND);
+  }
+
+  // "3:15 PM · Kawsar Hosain (1986) · Wurood · B-5583962"
+  function bookingLine(item, withId = true) {
+    const time = item.ts == null ? null : fmtTime(item.ts);
+    return [time, item.bikerName, item.zone, withId ? item.idText : null]
+      .filter(Boolean)
+      .join(' · ');
+  }
+
+  // background.js turns this into the sound and the Windows notification. Without the extension
   // context (injected as a plain script, or after the extension was reloaded) there is nobody to
   // tell.
-  function notifyNew(items) {
+  function notify(type, items, lineOf, sound) {
     const lines = [...items]
       .sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity))
-      .map((item) =>
-        [item.ts == null ? null : fmtTime(item.ts), item.bikerName, item.zone, item.idText]
-          .filter(Boolean)
-          .join(' · '),
-      );
+      .map((item) => lineOf(item)); // map(lineOf) would pass the index as bookingLine's withId
     try {
       if (!globalThis.chrome?.runtime?.id) return;
-      const sent = chrome.runtime.sendMessage({
-        type: 'swx:new-bookings',
-        count: items.length,
-        lines,
-        sound: NEW_BOOKING_SOUND,
-      });
+      const sent = chrome.runtime.sendMessage({ type, count: items.length, lines, sound });
       sent?.catch?.(() => {});
     } catch {}
   }
 
-  // The bikers panel: per biker, washes done and left (cancelled ones don't count), the next
-  // one, and the remaining list as text to copy. Bikers with a wash coming up first.
+  // "🔴 2 · " before the tab's title while red bookings are on the list, so they show from the
+  // other tabs too.
+  function markTitle(red) {
+    const base = document.title.replace(TITLE_PREFIX_RE, '');
+    const title = red ? `🔴 ${red} · ${base}` : base;
+    if (document.title !== title) document.title = title;
+  }
+
+  // What a biker is busy with: the wash being washed, else the customer reached, else the one on
+  // the way to. Free otherwise.
+  const ACTIVE = [(item) => item.washing, (item) => item.reached, (item) => item.onWay];
+
+  function activity(item, now) {
+    const tone = rowTone(item, now);
+    if (item.washing) {
+      const minutes = item.start ? Math.floor((now - item.start.at) / MINUTE) : 0;
+      return { text: TXT.washingFor(minutes), zone: item.zone, note: null, tone };
+    }
+    const text = item.reached ? TXT.reachedNow : TXT.onWayNow;
+    const note = item.ts == null ? null : lateLabel(item, now);
+    return { text, zone: item.zone, note, tone };
+  }
+
+  // The bikers panel: per biker, washes done and left (cancelled ones don't count), what they're
+  // doing now and their next wash, and the remaining list as text to copy. Bikers with a wash
+  // coming up first.
   function summarizeBikers(items, now) {
     const byBiker = new Map();
     for (const item of items) {
@@ -882,16 +983,21 @@
     return [...byBiker.values()]
       .map(({ name, done, left }) => {
         left.sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity) || (a.id || 0) - (b.id || 0));
-        const next = left[0];
         const when = (item) => (item.ts == null ? '—' : fmtTime(item.ts));
+        const active = ACTIVE.reduce((found, test) => found || left.find(test), null);
+        const upcoming = left.find((item) => item !== active);
         return {
           name,
           done,
           left: left.length,
-          nextAt: next?.ts ?? null,
-          nextDetail: next ? [when(next), next.zone].filter(Boolean).join(' · ') : null,
-          washing: Boolean(next?.washing),
-          level: next ? rowTone(next, now) : null,
+          nextAt: left[0]?.ts ?? null,
+          doing: active
+            ? activity(active, now)
+            : { text: left.length ? TXT.idle : TXT.allDone, tone: 'idle' },
+          upcoming: upcoming && {
+            detail: [when(upcoming), upcoming.zone].filter(Boolean).join(' · '),
+            tone: rowTone(upcoming, now),
+          },
           copy: [
             TXT.copyHeader(name),
             ...left.map(
@@ -937,6 +1043,8 @@
         if (hidden) past++;
       }
       next.fresh += markNew(items, now);
+      markCancelled(items, now);
+      alertRed(items, now);
       if (parsed) sortRows(tbody, items);
       if (table.parentElement) {
         const allHidden = rows > 0 && past === rows;
@@ -950,6 +1058,7 @@
     stats = next;
     bikers = nextBikers;
     washingRows = nextWashing;
+    markTitle(next.red);
     observer?.takeRecords(); // our own writes must not trigger another pass
     renderPill();
   }
@@ -1045,12 +1154,13 @@
     }
   }
 
-  async function startReload() {
+  // `force`: the refresh-now button, which doesn't wait for an open dialog or recent activity.
+  async function startReload(force = false) {
     reloading = true;
     phase = 'probing';
     renderPill();
     const online = await isOnline();
-    const reason = online ? busyReason(Date.now()) : null;
+    const reason = online && !force ? busyReason(Date.now()) : null;
     if (!online || reason || !onList()) {
       reloading = false;
       phase = online ? reason || 'idle' : 'offline';
@@ -1129,10 +1239,14 @@
       border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
     }
     .biker .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .biker .counts, .biker .next { white-space: nowrap; opacity: 0.85; }
-    .biker.yellow .next { color: #f59e0b; opacity: 1; font-weight: 700; }
-    .biker.red .next { color: #ef4444; opacity: 1; font-weight: 700; }
-    .biker.green .next { color: #16a34a; opacity: 1; font-weight: 700; }
+    .biker .counts, .biker .now { white-space: nowrap; }
+    .biker .counts { opacity: 0.85; }
+    .doing { font-weight: 700; }
+    .doing.idle { font-weight: 400; opacity: 0.7; }
+    .upcoming { font-size: 12px; opacity: 0.75; }
+    .doing.green, .upcoming.green { color: #16a34a; opacity: 1; }
+    .doing.yellow, .upcoming.yellow { color: #f59e0b; opacity: 1; }
+    .doing.red, .upcoming.red { color: #ef4444; opacity: 1; }
     .empty { padding: 8px 0; opacity: 0.7; }
     /* The countdown doubles as the button that opens the refresh editor. */
     .status { border: 0; padding: 0; border-radius: 4px; }
@@ -1187,7 +1301,10 @@
       </div>
       <div class="pill" dir="rtl" lang="ar">
         <div class="row">
-          <span class="part"><button type="button" class="status" aria-expanded="false"></button></span>
+          <span class="part">
+            <button type="button" class="status" aria-expanded="false"></button>
+            <button type="button" class="refresh-now">${TXT.refreshNow}</button>
+          </span>
           <span class="part summary" hidden><span class="sep">·</span><span class="summary-text"></span></span>
           <span class="part late" hidden><span class="sep">·</span><span class="late-text"></span></span>
           <span class="part fresh" hidden><span class="sep">·</span><span class="fresh-text"></span></span>
@@ -1212,6 +1329,7 @@
       host,
       shadow,
       status: find('.status'),
+      refreshNow: find('.refresh-now'),
       summary: find('.summary'),
       summaryText: find('.summary-text'),
       late: find('.late'),
@@ -1238,6 +1356,10 @@
     pill.toggle.addEventListener('click', toggleShowPast);
     pill.bikersButton.addEventListener('click', () => setPanel(panelOpen ? null : 'bikers'));
     pill.status.addEventListener('click', () => setPanel(editorOpen ? null : 'refresh'));
+    pill.refreshNow.title = TXT.refreshNowTitle;
+    pill.refreshNow.addEventListener('click', () => {
+      if (!reloading) startReload(true).catch(markError);
+    });
     find('.close').addEventListener('click', () => setPanel(null));
     find('.close-refresh').addEventListener('click', () => setPanel(null));
     find('.reset').addEventListener('click', () => setSort(DEFAULT_SORT.key, DEFAULT_SORT.dir));
@@ -1288,15 +1410,24 @@
       copy.title = TXT.copyTitle;
       copy.disabled = biker.left === 0;
       copy.addEventListener('click', () => copyText(biker.copy, copy));
-      // <bdi> keeps "3:15 PM · Wurood" in its own order inside the Arabic line.
-      const label = biker.washing ? TXT.washingNow : TXT.nextWash;
-      const next = make('div', 'next', biker.nextDetail ? `${label} ` : TXT.allDone);
-      if (biker.nextDetail) next.append(make('bdi', null, biker.nextDetail));
-      const row = make('div', `biker ${biker.level || ''}`.trim());
+      // Now: "يغسل من 25 د · Wurood", "في الطريق · Wurood · باقي 8 د" or "فاضي"; under it the
+      // next wash. <bdi> keeps "3:15 PM · Wurood" in its own order inside the Arabic line.
+      const { doing, upcoming } = biker;
+      const current = make('div', 'now');
+      const line = make('div', `doing ${doing.tone || ''}`.trim(), doing.text);
+      if (doing.zone) line.append(' · ', make('bdi', null, doing.zone));
+      if (doing.note) line.append(` · ${doing.note}`);
+      current.append(line);
+      if (upcoming) {
+        const next = make('div', `upcoming ${upcoming.tone || ''}`.trim(), `${TXT.nextWash} `);
+        next.append(make('bdi', null, upcoming.detail));
+        current.append(next);
+      }
+      const row = make('div', 'biker');
       row.append(
         make('div', 'name', biker.name),
         make('div', 'counts', TXT.bikerCounts(biker.done, biker.left)),
-        next,
+        current,
         copy,
       );
       p.list.append(row);
@@ -1352,8 +1483,12 @@
     if (!p) return;
     const visible = onList();
     p.host.style.setProperty('display', visible ? 'block' : 'none', 'important');
-    if (!visible) return;
+    if (!visible) {
+      markTitle(0);
+      return;
+    }
     setText(p.status, statusText());
+    p.refreshNow.disabled = reloading;
     setValue(p.status, 'title', TXT.refreshTitle(refreshMinutes));
     p.status.setAttribute('aria-expanded', String(editorOpen));
     p.editor.hidden = !editorOpen;
