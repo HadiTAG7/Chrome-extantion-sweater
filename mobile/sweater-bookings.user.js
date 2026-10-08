@@ -1,3 +1,38 @@
+// ==UserScript==
+// @name         مساعد حجوزات سويتر
+// @namespace    https://github.com/HadiTAG7/Chrome-extantion-sweater
+// @version      1.10.0
+// @description  يخفي الغسلات اللي خلصت، يرتّبها، ينبّه على المتأخرة والجديدة، يحسب وقت الغسيل، ويحدّث صفحة الحجوزات تلقائياً.
+// @homepageURL  https://github.com/HadiTAG7/Chrome-extantion-sweater
+// @icon         https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/icons/icon48.png
+// @match        https://ssp-portal.sweater.sa/*
+// @run-at       document-start
+// @grant        none
+// @inject-into  page
+// @noframes
+// @downloadURL  https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/mobile/sweater-bookings.user.js
+// @updateURL    https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/mobile/sweater-bookings.user.js
+// ==/UserScript==
+
+// Built by tools/build-userscript.js from content.css and content.js: edit those, not this
+// file, then run `node tools/build-userscript.js`.
+
+(() => {
+  const add = () => {
+    if (document.getElementById('swx-css')) return true;
+    const parent = document.head || document.documentElement;
+    if (!parent) return false;
+    const style = document.createElement('style');
+    style.id = 'swx-css';
+    style.textContent = "/* مساعد حجوزات سويتر: content.js marks the rows, these rules show or hide them. */\n\n/* Finished washes, and cancelled bookings whose slot started more than GRACE_MINUTES ago. */\nhtml:not([data-swx-show-past]) tr[data-swx-past] {\n  display: none !important;\n}\n\n/* \"Show\" toggled on from the pill: keep them visible but dimmed. */\nhtml[data-swx-show-past] tr[data-swx-past] {\n  opacity: 0.45;\n}\n\n/* Every booking on the page is hidden: say so under the table instead of showing an empty body. */\nhtml:not([data-swx-show-past]) [data-swx-empty]::after {\n  content: attr(data-swx-empty);\n  display: block;\n  padding: 2rem 1rem;\n  text-align: center;\n  opacity: 0.7;\n  font:\n    500 14px/1.6 Tajawal,\n    system-ui,\n    sans-serif;\n}\n\n/* The biker's wash number of the day (\"2/4\"), after the mobile number under the name. */\n#root [data-swx-seq]::after {\n  content: attr(data-swx-seq);\n  margin-inline-start: 8px;\n  padding: 0 6px;\n  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));\n  border-radius: 999px;\n  background: var(--muted, rgba(127, 127, 127, 0.15));\n  color: var(--foreground, inherit);\n  font-size: 11px;\n  font-weight: 600;\n  line-height: 16px;\n  white-space: nowrap;\n  unicode-bidi: isolate; /* \"2/4\" stays \"2/4\" in the Arabic (rtl) layout too */\n}\n\n/* Still \"Initiated\" or \"On the Way\" (the biker isn't there yet) close to, or past, the booking\n   time: yellow, then red. Washing: green, then yellow and red when the wash runs long. */\n#root tr[data-swx-tone='green'] {\n  background-color: rgba(34, 197, 94, 0.16) !important;\n}\n\n#root tr[data-swx-tone='yellow'] {\n  background-color: rgba(234, 179, 8, 0.16) !important;\n}\n\n#root tr[data-swx-tone='red'] {\n  background-color: rgba(239, 68, 68, 0.2) !important;\n}\n\n/* \"باقي 8 د\" / \"متأخرة 25 د\" / \"يغسل 47:12\" under the booking time. */\n#root [data-swx-note]::after {\n  content: attr(data-swx-note);\n  display: block;\n  font-size: 11px;\n  font-weight: 700;\n  line-height: 14px;\n  white-space: nowrap;\n  font-variant-numeric: tabular-nums; /* the ticking timer keeps its width */\n}\n\n#root tr[data-swx-tone='green'] [data-swx-note]::after {\n  color: #16a34a;\n}\n\n#root tr[data-swx-tone='yellow'] [data-swx-note]::after {\n  color: #f59e0b;\n}\n\n#root tr[data-swx-tone='red'] [data-swx-note]::after {\n  color: #ef4444;\n}\n\n/* A booking that wasn't there at the earlier refreshes, or that was cancelled since (red, and it\n   wins when both apply to the same booking). */\n#root [data-swx-new]::after,\n#root [data-swx-cancelled]::after {\n  content: 'جديد';\n  display: block;\n  width: fit-content;\n  margin-top: 2px;\n  padding: 0 6px;\n  border-radius: 999px;\n  background: #16a34a;\n  color: #fff;\n  font-size: 11px;\n  font-weight: 700;\n  line-height: 16px;\n}\n\n#root [data-swx-cancelled]::after {\n  content: 'ألغي';\n  background: #dc2626;\n}\n\n/* Service time without the portal's long decimals: the original text is hidden, not changed. */\n#root [data-swx-service] {\n  font-size: 0 !important;\n}\n\n#root [data-swx-service]::after {\n  content: attr(data-swx-service);\n  font-size: 0.875rem;\n}\n\n/* Booking Time and Biker headers: the portal can't sort them, the extension can. */\n#root thead th[data-swx-sortable] {\n  cursor: pointer;\n  user-select: none;\n}\n\n#root thead th[data-swx-sortable]:hover > div {\n  text-decoration: underline;\n}\n\n/* The arrow follows the label in a zero-width box, so the column keeps its width. */\n#root thead th[data-swx-sortable][aria-sort] > div::after {\n  display: inline-block;\n  width: 0;\n  white-space: nowrap;\n}\n\n#root thead th[data-swx-sortable][aria-sort='ascending'] > div::after {\n  content: '\\00a0↑';\n}\n\n#root thead th[data-swx-sortable][aria-sort='descending'] > div::after {\n  content: '\\00a0↓';\n}\n\n@media print {\n  swx-pill {\n    display: none !important;\n  }\n}\n";
+    parent.appendChild(style);
+    return true;
+  };
+  if (add()) return;
+  const watcher = new MutationObserver(() => add() && watcher.disconnect());
+  watcher.observe(document, { childList: true, subtree: true });
+})();
+
 /*
  * مساعد حجوزات سويتر (Sweater bookings helper)
  *
