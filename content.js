@@ -44,7 +44,7 @@
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.12.0';
+  const VERSION = '1.13.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -63,6 +63,7 @@
   const OVERLAY_IDLE_LIMIT_MS = 10 * MINUTE; // an open dialog holds the reload unless left idle
   const OFFLINE_RETRY_MS = 30 * 1000;
   const REFETCH_TIMEOUT_MS = 20 * 1000; // a refresh in place waits this long for the list, twice
+  const ASK_AUTOPLAY_MS = 3 * 1000; // Firefox on Android may still be asking the app about sound
   const PROBE_TIMEOUT_MS = 8 * 1000;
   const SPA_FIX_GUARD_MS = 30 * 1000;
   const RIYADH_TZ_OFFSET = -180; // Date#getTimezoneOffset() in Saudi Arabia (UTC+3, no DST)
@@ -242,8 +243,15 @@
   // The phone userscript brings the sounds along and plays them in the page; the extension plays
   // its own from background.js.
   const PAGE_SOUNDS = window.__swxSounds || null;
-  let soundState = PAGE_SOUNDS ? autoplayState() : 'on'; // on | blocked | unknown
   let players = {}; // one <audio> per sound, see player()
+  // Firefox on Android only learns the site's autoplay setting (from the app) once the page has
+  // made a sound, and again on every load: so the sounds are made right away, and the browser's
+  // answer is read again every second (see checkAutoplay) rather than once.
+  if (PAGE_SOUNDS) for (const name of Object.keys(PAGE_SOUNDS)) player(name);
+  let soundPolicy = PAGE_SOUNDS ? autoplayPolicy() : null; // the browser's last answer
+  let soundState = 'on'; // on | asking (no button yet) | blocked | unknown (the 🔊 button)
+  if (PAGE_SOUNDS && soundPolicy !== 'allowed') soundState = soundPolicy ? 'asking' : 'unknown';
+  const askAutoplayUntil = Date.now() + ASK_AUTOPLAY_MS;
   // The phone version refreshes the table in place (see refetchList), knowing from the bookings
   // lists the portal receives that it worked.
   let listResponses = 0;
@@ -1020,14 +1028,25 @@
     );
   }
 
-  // What the browser says before anything plays (Firefox can tell; the others can't).
-  function autoplayState() {
+  // What the browser says before anything plays: Firefox can tell, the others can't (null).
+  function autoplayPolicy() {
     try {
-      const policy = navigator.getAutoplayPolicy?.('mediaelement');
-      if (policy === 'allowed') return 'on';
-      if (policy) return 'blocked';
-    } catch {}
-    return 'unknown';
+      return navigator.getAutoplayPolicy?.('mediaelement') || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Every second: the button goes as soon as the browser's answer turns to "allowed" (Firefox on
+  // Android once the app has answered, or after a tap anywhere on the page), and shows if it
+  // still says no after ASK_AUTOPLAY_MS. Only a change of answer hides it: a sound that failed
+  // for another reason keeps it up.
+  function checkAutoplay(now) {
+    if (!PAGE_SOUNDS) return;
+    const policy = autoplayPolicy();
+    if (policy === 'allowed' && soundPolicy !== 'allowed') setSoundState('on');
+    else if (soundState === 'asking' && now >= askAutoplayUntil) setSoundState('blocked');
+    soundPolicy = policy;
   }
 
   function setSoundState(state) {
@@ -1341,6 +1360,7 @@
         if (now - lastApplyAt >= REAPPLY_MS) applyAll();
         else tickWashing(now);
         checkRefetch(now);
+        checkAutoplay(now);
         if (!refreshing && now >= nextRefreshAt) {
           const reason = busyReason(now);
           if (reason) phase = reason;
@@ -1689,7 +1709,7 @@
     p.fresh.hidden = stats.fresh === 0;
     setText(p.freshText, TXT.freshCount(stats.fresh));
     p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
-    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on';
+    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on' || soundState === 'asking';
     p.past.hidden = stats.past === 0;
     setText(p.count, `${TXT.pastCount} ${stats.past}`);
     setText(p.toggle, showPast ? TXT.hide : TXT.show);
