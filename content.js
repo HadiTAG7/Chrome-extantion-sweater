@@ -43,7 +43,7 @@
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.10.0';
+  const VERSION = '1.11.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -119,6 +119,15 @@
     refreshing: 'جارٍ التحديث…',
     refreshNow: '↻ حدّث الحين',
     refreshNowTitle: 'حدّث الصفحة الحين بدون ما تنتظر العد',
+    soundOn: '🔊 تشغيل الصوت',
+    soundOnTitle:
+      'المتصفح يمنع الصوت لين تضغط هنا. عشان يشتغل دايماً اسمح بالتشغيل التلقائي للموقع (شوف «على الجوال» في README)',
+    // The notifications without the extension (the extension's own are in background.js).
+    alertTitles: {
+      'swx:new-bookings': (n) => (n === 1 ? 'حجز جديد' : `حجوزات جديدة (${n})`),
+      'swx:red-alert': (n) => (n === 1 ? 'تنبيه تأخير' : `تنبيهات تأخير (${n})`),
+      'swx:cancelled': (n) => (n === 1 ? 'حجز ملغي' : `حجوزات ملغية (${n})`),
+    },
     offline: 'لا يوجد اتصال — إعادة المحاولة بعد قليل',
     pastCount: 'الغسلات المخفية:',
     show: 'إظهار',
@@ -227,6 +236,10 @@
   let stats = emptyStats();
   let bikers = []; // per-biker summaries for the panel
   let washingRows = []; // the rows being washed at the last pass, for the timers' ticks
+  // The phone userscript brings the sounds along and plays them in the page; the extension plays
+  // its own from background.js.
+  const PAGE_SOUNDS = window.__swxSounds || null;
+  let soundState = PAGE_SOUNDS ? autoplayState() : 'on'; // on | blocked | unknown
   let washStarts = null; // see washStart(); loaded on first use
   const startRequests = new Map(); // booking → when its start time was last asked for
   let panelOpen = false; // the bikers panel
@@ -935,17 +948,77 @@
   }
 
   // background.js turns this into the sound and the Windows notification. Without the extension
-  // context (injected as a plain script, or after the extension was reloaded) there is nobody to
-  // tell.
+  // (the phone userscript, or after the extension was reloaded) the page does what it can.
   function notify(type, items, lineOf, sound) {
     const lines = [...items]
       .sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity))
       .map((item) => lineOf(item)); // map(lineOf) would pass the index as bookingLine's withId
     try {
-      if (!globalThis.chrome?.runtime?.id) return;
-      const sent = chrome.runtime.sendMessage({ type, count: items.length, lines, sound });
-      sent?.catch?.(() => {});
+      if (globalThis.chrome?.runtime?.id) {
+        const sent = chrome.runtime.sendMessage({ type, count: items.length, lines, sound });
+        sent?.catch?.(() => {});
+        return;
+      }
     } catch {}
+    pageAlert(type, items.length, lines, sound).catch(markError);
+  }
+
+  // ---------- sounds and notifications without the extension (phones) ----------
+
+  const ALERT_SOUNDS = {
+    'swx:new-bookings': 'new',
+    'swx:red-alert': 'red',
+    'swx:cancelled': 'cancel',
+  };
+
+  // The sound plays when the browser lets the page play one (on Android: autoplay allowed for the
+  // site in Firefox, or a tap since the page loaded), and the notification shows in the phone's
+  // bar if the site may send them.
+  async function pageAlert(type, count, lines, sound) {
+    if (!PAGE_SOUNDS) return;
+    const played = sound ? await playSound(PAGE_SOUNDS[ALERT_SOUNDS[type]]) : false;
+    if (globalThis.Notification?.permission !== 'granted') return;
+    const shown = lines.slice(0, 4);
+    try {
+      new Notification(TXT.alertTitles[type](count), {
+        body: shown.join('\n') + (count > shown.length ? `\n+${count - shown.length}` : ''),
+        lang: 'ar',
+        dir: 'rtl',
+        silent: played, // our sound instead of the phone's, not both
+      });
+    } catch {} // some phone browsers only take notifications from a service worker
+  }
+
+  function playSound(src) {
+    return new Audio(src).play().then(
+      () => (setSoundState('on'), true),
+      () => (setSoundState('blocked'), false),
+    );
+  }
+
+  // What the browser says before anything plays (Firefox can tell; the others can't).
+  function autoplayState() {
+    try {
+      const policy = navigator.getAutoplayPolicy?.('mediaelement');
+      if (policy === 'allowed') return 'on';
+      if (policy) return 'blocked';
+    } catch {}
+    return 'unknown';
+  }
+
+  function setSoundState(state) {
+    if (soundState === state) return;
+    soundState = state;
+    renderPill();
+  }
+
+  // The pill's 🔊 button: the tap lets this page play sound (until it reloads, unless autoplay is
+  // allowed for the site) and is the moment to ask for notifications.
+  function enableSound() {
+    playSound(PAGE_SOUNDS.new);
+    if (globalThis.Notification?.permission === 'default') {
+      Notification.requestPermission()?.catch?.(() => {});
+    }
   }
 
   // "🔴 2 · " before the tab's title while red bookings are on the list, so they show from the
@@ -1226,6 +1299,7 @@
     button:focus-visible { outline: 2px solid var(--ring, #f97316); outline-offset: 2px; }
     button:disabled { opacity: 0.4; cursor: default; }
     .fresh-text { color: #22c55e; }
+    .sound-on { color: #f59e0b; border-color: #f59e0b; }
     .warn { color: #f59e0b; }
     .panel {
       position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
@@ -1331,6 +1405,10 @@
           <span class="part">
             <button type="button" class="bikers" aria-expanded="false">${TXT.bikers}</button>
           </span>
+          <span class="part sound" hidden>
+            <span class="sep">·</span>
+            <button type="button" class="sound-on">${TXT.soundOn}</button>
+          </span>
           <span class="part past" hidden>
             <span class="sep">·</span><span class="count"></span>
             <button type="button" class="toggle" aria-pressed="false"></button>
@@ -1358,6 +1436,8 @@
       count: find('.count'),
       toggle: find('.toggle'),
       bikersButton: find('.bikers'),
+      sound: find('.sound'),
+      soundOn: find('.sound-on'),
       sort: find('.sort'),
       sortText: find('.sort-text'),
       warn: find('.warn'),
@@ -1373,6 +1453,8 @@
     pill.toggle.title = TXT.toggleTitle;
     pill.toggle.addEventListener('click', toggleShowPast);
     pill.bikersButton.addEventListener('click', () => setPanel(panelOpen ? null : 'bikers'));
+    pill.soundOn.title = TXT.soundOnTitle;
+    pill.soundOn.addEventListener('click', enableSound);
     pill.status.addEventListener('click', () => setPanel(editorOpen ? null : 'refresh'));
     pill.refreshNow.title = TXT.refreshNowTitle;
     pill.refreshNow.addEventListener('click', () => {
@@ -1522,6 +1604,7 @@
     p.fresh.hidden = stats.fresh === 0;
     setText(p.freshText, TXT.freshCount(stats.fresh));
     p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
+    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on';
     p.past.hidden = stats.past === 0;
     setText(p.count, `${TXT.pastCount} ${stats.past}`);
     setText(p.toggle, showPast ? TXT.hide : TXT.show);

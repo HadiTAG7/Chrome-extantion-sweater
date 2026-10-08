@@ -54,11 +54,21 @@ const styles = `(() => {
   watcher.observe(document, { childList: true, subtree: true });
 })();`;
 
+// The extension's sounds, for the page to play (on a computer the extension's background page
+// plays them): content.js picks them up as window.__swxSounds.
+const sound = (file) =>
+  `data:audio/mpeg;base64,${fs.readFileSync(path.join(ROOT, 'sounds', file)).toString('base64')}`;
+const sounds = `window.__swxSounds = ${JSON.stringify({
+  new: sound('new-booking.mp3'),
+  red: sound('red-alert.mp3'),
+  cancel: sound('cancelled.mp3'),
+})};`;
+
 const note = [
   '// Built by tools/build-userscript.js from content.css and content.js: edit those, not this',
   '// file, then run `node tools/build-userscript.js`.',
 ].join('\n');
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
-fs.writeFileSync(OUT, `${header}\n\n${note}\n\n${styles}\n\n${js}`);
+fs.writeFileSync(OUT, `${header}\n\n${note}\n\n${styles}\n\n${sounds}\n\n${js}`);
 console.log(`${path.relative(ROOT, OUT)}: version ${manifest.version}`);
