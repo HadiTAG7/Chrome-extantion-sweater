@@ -7,6 +7,7 @@
  *   - sorts the rows by booking time (default) or by the column picked in a header,
  *   - shows each biker's wash number of the day under the name ("2/4"),
  *   - colours "Initiated" and "On the Way" bookings close to (or past) their time yellow / red,
+ *     and "Reached" ones (the biker is there but hasn't started) red once their time comes,
  *   - times the washes in progress (green, then yellow / red when they run long),
  *   - marks bookings that appeared since the last refreshes as new, with a Windows notification,
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
@@ -30,12 +31,13 @@
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
   const ONWAY_YELLOW_MINUTES = 10; // غسلة لسا في الطريق (On the Way) وباقي هالكم دقيقة أو أقل: أصفر
   const ONWAY_RED_MINUTES = 5; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
+  const REACHED_RED_MINUTES = 0; // البايكر وصل وما بدأ الغسيل: أحمر لما يبقى على موعدها هالكم دقيقة أو أقل (0: أول ما يجي موعدها)
   const WASH_YELLOW_MINUTES = 60; // غسلة بدأ غسيلها: خضراء، ولما يصير له يغسل هالكم دقيقة: صفراء
   const WASH_RED_MINUTES = 70; // ولما يصير له يغسل هالكم دقيقة: حمراء
   const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
   const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.7.0';
+  const VERSION = '1.8.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -73,6 +75,8 @@
   const INITIATED_RE = /^(initiated|معتمدة)$/i;
   // The biker has set off but hasn't reached the customer yet.
   const ON_WAY_RE = /^(on the way|on_way|في الطريق)$/i;
+  // At the customer, the wash not started yet.
+  const REACHED_RE = /^(reached|وصل)$/i;
   // Washing now: the timer runs from the start of the service.
   const WASHING_RE = /^(washing started|start_wash|بدأ الغسيل)$/i;
   // The portal's empty table (as opposed to its loading or error row).
@@ -128,7 +132,10 @@
       `غسلات لسا في الطريق: 🔴 باقي ${ONWAY_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
       ` 🟡 باقي ${ONWAY_YELLOW_MINUTES} دقائق أو أقل.\n` +
       `غسلات بدأ غسيلها: 🟢 من البداية، 🟡 بعد ${duration(WASH_YELLOW_MINUTES)}،` +
-      ` 🔴 بعد ${duration(WASH_RED_MINUTES)}`,
+      ` 🔴 بعد ${duration(WASH_RED_MINUTES)}.\n` +
+      `البايكر وصل وما بدأ الغسيل: 🔴 ${
+        REACHED_RED_MINUTES > 0 ? `باقي ${REACHED_RED_MINUTES} دقائق أو أقل` : 'لما يجي موعدها'
+      }`,
     freshCount: (n) => `جديدة ${n}`,
     minutesLeft: (n) => `باقي ${duration(n)}`,
     minutesLate: (n) => `متأخرة ${duration(n)}`,
@@ -532,6 +539,7 @@
       done: DONE_RE.test(status),
       initiated: INITIATED_RE.test(status),
       onWay: ON_WAY_RE.test(status),
+      reached: REACHED_RE.test(status),
       washing: WASHING_RE.test(status),
       zone: text('zone'),
       serviceText: text('service'),
@@ -616,11 +624,12 @@
     });
   }
 
-  // [yellow, red] minutes before the booking time, for the statuses that haven't reached the
-  // customer yet: "Initiated" (the biker hasn't set off) and "On the Way".
+  // [yellow, red] minutes before the booking time, for the statuses whose wash hasn't started:
+  // "Initiated" (the biker hasn't set off), "On the Way" and "Reached" (red only).
   function lateLimits(item) {
     if (item.initiated) return [LATE_YELLOW_MINUTES, LATE_RED_MINUTES];
     if (item.onWay) return [ONWAY_YELLOW_MINUTES, ONWAY_RED_MINUTES];
+    if (item.reached) return [REACHED_RED_MINUTES, REACHED_RED_MINUTES];
     return null;
   }
 
@@ -634,7 +643,7 @@
     return past && (item.cancelled || !hasStatus);
   }
 
-  // Close to or past the booking time and the biker isn't there yet: yellow, then red.
+  // Close to or past the booking time and the wash hasn't started: yellow, then red.
   function lateLevel(item, now) {
     const limits = lateLimits(item);
     if (!limits || item.ts == null) return null;
