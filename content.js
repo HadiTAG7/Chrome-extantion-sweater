@@ -13,7 +13,8 @@
  *     notification and a sound, and alerts (once) when a booking turns red; the red count also
  *     shows in the tab's title,
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
- *   - reloads the page every few minutes (set from the pill; follows "today" past midnight),
+ *   - refreshes the page every few minutes (set from the pill; follows "today" past midnight),
+ *     the phone version without reloading it,
  *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
  *   - shows a status pill at the bottom of the page: countdown (and a refresh-now button), day
  *     summary, a live per-biker panel (what each one is doing now, what's next, a copy-for-WhatsApp
@@ -43,7 +44,7 @@
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.11.0';
+  const VERSION = '1.12.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -51,6 +52,7 @@
   const NEW_BADGE_MS = NEW_BADGE_MINUTES * MINUTE;
   // The portal's own backend: a booking's details say when its wash started.
   const API_BASE = 'https://ssp-portal-backend.sweater.sa/api';
+  const LIST_REQUEST_RE = /\/api\/bookings\?/i; // its request for the bookings list
   const API_TIMEOUT_MS = 10 * 1000;
   const API_RETRY_MS = 2 * MINUTE; // a booking whose start time couldn't be read is asked again
   const WASH_KEEP_MS = 24 * 60 * MINUTE; // wash start times are forgotten after a day
@@ -60,6 +62,7 @@
   const MAX_ACTIVITY_POSTPONE_MS = 2 * MINUTE; // ...unless the reload is already this late
   const OVERLAY_IDLE_LIMIT_MS = 10 * MINUTE; // an open dialog holds the reload unless left idle
   const OFFLINE_RETRY_MS = 30 * 1000;
+  const REFETCH_TIMEOUT_MS = 20 * 1000; // a refresh in place waits this long for the list, twice
   const PROBE_TIMEOUT_MS = 8 * 1000;
   const SPA_FIX_GUARD_MS = 30 * 1000;
   const RIYADH_TZ_OFFSET = -180; // Date#getTimezoneOffset() in Saudi Arabia (UTC+3, no DST)
@@ -121,7 +124,7 @@
     refreshNowTitle: 'حدّث الصفحة الحين بدون ما تنتظر العد',
     soundOn: '🔊 تشغيل الصوت',
     soundOnTitle:
-      'المتصفح يمنع الصوت لين تضغط هنا. عشان يشتغل دايماً اسمح بالتشغيل التلقائي للموقع (شوف «على الجوال» في README)',
+      'المتصفح يمنع الصوت لين تضغط هنا، والضغطة تكفي طول ما الصفحة مفتوحة. وعلى أندرويد تقدر تسمح بالتشغيل التلقائي للموقع وما تحتاجها أبداً (شوف «على الجوال» في README)',
     // The notifications without the extension (the extension's own are in background.js).
     alertTitles: {
       'swx:new-bookings': (n) => (n === 1 ? 'حجز جديد' : `حجوزات جديدة (${n})`),
@@ -230,7 +233,7 @@
   let lastApplyAt = 0;
   let lastActivityAt = 0;
   let phase = 'idle'; // idle | overlay | activity | probing | offline
-  let reloading = false;
+  let refreshing = false;
   let showPast = store.get('showPast') === '1';
   let sort = loadSort();
   let stats = emptyStats();
@@ -240,6 +243,12 @@
   // its own from background.js.
   const PAGE_SOUNDS = window.__swxSounds || null;
   let soundState = PAGE_SOUNDS ? autoplayState() : 'on'; // on | blocked | unknown
+  let players = {}; // one <audio> per sound, see player()
+  // The phone version refreshes the table in place (see refetchList), knowing from the bookings
+  // lists the portal receives that it worked.
+  let listResponses = 0;
+  let refetchWait = null; // { count, until } while a refresh in place waits for its list
+  const REFETCH = Boolean(PAGE_SOUNDS) && watchListResponses();
   let washStarts = null; // see washStart(); loaded on first use
   const startRequests = new Map(); // booking → when its start time was last asked for
   let panelOpen = false; // the bikers panel
@@ -422,6 +431,11 @@
     wasOnList = nowOnList;
     if (!nowOnList) {
       panelOpen = editorOpen = false;
+      if (refetchWait) {
+        refetchWait = null; // no reload away from the list
+        refreshing = false;
+        phase = 'idle';
+      }
       return;
     }
     if (entered) {
@@ -976,7 +990,7 @@
   // bar if the site may send them.
   async function pageAlert(type, count, lines, sound) {
     if (!PAGE_SOUNDS) return;
-    const played = sound ? await playSound(PAGE_SOUNDS[ALERT_SOUNDS[type]]) : false;
+    const played = sound ? await playSound(ALERT_SOUNDS[type]) : false;
     if (globalThis.Notification?.permission !== 'granted') return;
     const shown = lines.slice(0, 4);
     try {
@@ -989,8 +1003,18 @@
     } catch {} // some phone browsers only take notifications from a service worker
   }
 
-  function playSound(src) {
-    return new Audio(src).play().then(
+  // One <audio> per sound, played again for every alert: Safari on the iPhone lets a page play an
+  // element only after a tap has started or loaded that very element, and then for as long as the
+  // page lives (a new element per alert would be refused every time).
+  function player(name) {
+    players[name] ||= new Audio(PAGE_SOUNDS[name]);
+    return players[name];
+  }
+
+  function playSound(name) {
+    const audio = player(name);
+    if (audio.currentTime) audio.currentTime = 0; // from the start if it played before
+    return audio.play().then(
       () => (setSoundState('on'), true),
       () => (setSoundState('blocked'), false),
     );
@@ -1012,10 +1036,13 @@
     renderPill();
   }
 
-  // The pill's 🔊 button: the tap lets this page play sound (until it reloads, unless autoplay is
-  // allowed for the site) and is the moment to ask for notifications.
+  // The pill's 🔊 button: the tap lets this page play sound for as long as it stays open (the
+  // sounds are made and loaded during the tap, for Safari), and is the moment to ask for
+  // notifications. With autoplay allowed for the site (Firefox), no tap is needed at all.
   function enableSound() {
-    playSound(PAGE_SOUNDS.new);
+    players = {};
+    for (const name of Object.keys(PAGE_SOUNDS)) player(name).load();
+    playSound('new');
     if (globalThis.Notification?.permission === 'default') {
       Notification.requestPermission()?.catch?.(() => {});
     }
@@ -1231,22 +1258,79 @@
   }
 
   // `force`: the refresh-now button, which doesn't wait for an open dialog or recent activity.
-  async function startReload(force = false) {
-    reloading = true;
+  async function startRefresh(force = false) {
+    refreshing = true;
     phase = 'probing';
     renderPill();
     const online = await isOnline();
     const reason = online && !force ? busyReason(Date.now()) : null;
-    if (!online || reason || !onList()) {
-      reloading = false;
-      phase = online ? reason || 'idle' : 'offline';
-      if (!online) nextRefreshAt = Date.now() + OFFLINE_RETRY_MS;
-      renderPill();
-      return;
-    }
+    if (!online || reason || !onList()) return endRefresh(online ? reason || 'idle' : 'offline');
     const url = rolloverUrl();
     if (url) location.replace(url);
+    else if (REFETCH) refetchList();
     else location.reload();
+  }
+
+  function endRefresh(next) {
+    refreshing = false;
+    refetchWait = null;
+    phase = next;
+    if (next === 'offline') nextRefreshAt = Date.now() + OFFLINE_RETRY_MS;
+    renderPill();
+  }
+
+  // The phone version's refresh, without reloading the page: a reload would take away the page's
+  // permission to play sound (the tap on 🔊), which phones give per page load. The portal's data
+  // client (TanStack Query) fetches everything on screen again when the connection comes back, so
+  // it is told the connection dropped and came back; its table stays up meanwhile.
+  function refetchList() {
+    refetchWait = { count: listResponses, until: Date.now() + REFETCH_TIMEOUT_MS, asked: 1 };
+    askRefetch();
+  }
+
+  function askRefetch() {
+    window.dispatchEvent(new Event('offline'));
+    window.dispatchEvent(new Event('online'));
+  }
+
+  // Done once a bookings list has arrived since. Without one it's asked once more (the phone may
+  // have slept meanwhile), then the page reloads after all.
+  function checkRefetch(now) {
+    if (!refetchWait) return;
+    if (listResponses > refetchWait.count) {
+      nextRefreshAt = now + refreshMinutes * MINUTE;
+      endRefresh('idle');
+    } else if (now >= refetchWait.until && refetchWait.asked < 2) {
+      refetchWait.asked++;
+      refetchWait.until = now + REFETCH_TIMEOUT_MS;
+      askRefetch();
+    } else if (now >= refetchWait.until) {
+      refetchWait = null;
+      isOnline()
+        .then((online) => {
+          if (online && onList()) location.reload();
+          else endRefresh(online ? 'idle' : 'offline');
+        })
+        .catch(markError);
+    }
+  }
+
+  // The bookings lists the portal receives, counted from the browser's resource timing (a refresh
+  // in place ends as soon as one arrives). False where the browser can't tell: the phone version
+  // then reloads like the extension.
+  function watchListResponses() {
+    try {
+      new PerformanceObserver((entries) => {
+        const before = listResponses;
+        for (const entry of entries.getEntries()) {
+          if (LIST_REQUEST_RE.test(entry.name)) listResponses++;
+        }
+        if (listResponses > before) safe(() => checkRefetch(Date.now()));
+      }).observe({ type: 'resource' });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function tick() {
@@ -1256,11 +1340,12 @@
         const now = Date.now();
         if (now - lastApplyAt >= REAPPLY_MS) applyAll();
         else tickWashing(now);
-        if (!reloading && now >= nextRefreshAt) {
+        checkRefetch(now);
+        if (!refreshing && now >= nextRefreshAt) {
           const reason = busyReason(now);
           if (reason) phase = reason;
-          else startReload().catch(markError);
-        } else if (!reloading && phase !== 'offline') {
+          else startRefresh().catch(markError);
+        } else if (!refreshing && phase !== 'offline') {
           phase = 'idle';
         }
       }
@@ -1458,7 +1543,7 @@
     pill.status.addEventListener('click', () => setPanel(editorOpen ? null : 'refresh'));
     pill.refreshNow.title = TXT.refreshNowTitle;
     pill.refreshNow.addEventListener('click', () => {
-      if (!reloading) startReload(true).catch(markError);
+      if (!refreshing) startRefresh(true).catch(markError);
     });
     find('.close').addEventListener('click', () => setPanel(null));
     find('.close-refresh').addEventListener('click', () => setPanel(null));
@@ -1588,7 +1673,7 @@
       return;
     }
     setText(p.status, statusText());
-    p.refreshNow.disabled = reloading;
+    p.refreshNow.disabled = refreshing;
     setValue(p.status, 'title', TXT.refreshTitle(refreshMinutes));
     p.status.setAttribute('aria-expanded', String(editorOpen));
     p.editor.hidden = !editorOpen;
