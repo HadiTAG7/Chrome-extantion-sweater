@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         مساعد حجوزات سويتر
 // @namespace    https://github.com/HadiTAG7/Chrome-extantion-sweater
-// @version      1.13.0
+// @version      1.14.0
 // @description  يخفي الغسلات اللي خلصت، يرتّبها، ينبّه على المتأخرة والجديدة، يحسب وقت الغسيل، ويحدّث صفحة الحجوزات تلقائياً.
 // @homepageURL  https://github.com/HadiTAG7/Chrome-extantion-sweater
 // @icon         https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/icons/icon48.png
@@ -81,7 +81,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.13.0';
+  const VERSION = '1.14.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
