@@ -3,7 +3,10 @@
 // addons.mozilla.org. Same code as for Chrome, with Firefox's own manifest.json:
 //   - the background runs as a page (background.scripts): Firefox has no service worker for
 //     extensions, and the page plays the sounds itself, so there's no offscreen document,
-//   - an add-on id and the data collection statement, which Mozilla needs to sign it.
+//   - an add-on id and the data collection statement, which Mozilla needs to sign it: with
+//     subscriptions set up (LICENSE_URL in content.js), the code typed is sent to the owner's
+//     Google Sheet, with a random id for the device. That's "authentication information" by
+//     Mozilla's definitions (an account's registration data); nothing else leaves the browser.
 // Run it after changing the extension:  node tools/build-firefox.js   (needs the zip command)
 'use strict';
 
@@ -27,7 +30,7 @@ const firefox = {
     gecko: {
       id: GECKO_ID,
       strict_min_version: '115.0', // Firefox 115 ESR is the last one for Windows 7
-      data_collection_permissions: { required: ['none'] }, // nothing leaves the browser
+      data_collection_permissions: { required: ['authenticationInfo'] }, // the subscription code
     },
   },
 };

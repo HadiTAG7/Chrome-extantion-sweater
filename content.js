@@ -18,7 +18,9 @@
  *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
  *   - shows a status pill at the bottom of the page: countdown (and a refresh-now button), day
  *     summary, a live per-biker panel (what each one is doing now, what's next, a copy-for-WhatsApp
- *     button) and the controls.
+ *     button) and the controls,
+ *   - with subscriptions set up (LICENSE_URL), does all this for a valid code only: the owner's
+ *     Google Sheet says which (tools/subscriptions.gs), and the pill asks for the code otherwise.
  *
  * The portal is a React SPA whose table rows are keyed by index: React rewrites the text of
  * existing <tr>s in place. So every pass re-reads the rows from their text, rows are never
@@ -44,7 +46,7 @@
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.14.0';
+  const VERSION = '1.15.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -55,6 +57,18 @@
   const LIST_REQUEST_RE = /\/api\/bookings\?/i; // its request for the bookings list
   const API_TIMEOUT_MS = 10 * 1000;
   const API_RETRY_MS = 2 * MINUTE; // a booking whose start time couldn't be read is asked again
+  // Subscriptions: the owner's Google Sheet (tools/subscriptions.gs, deployed as a web app) says
+  // whether a code is valid, and lets it run on one device. Empty: no subscription needed.
+  const LICENSE_URL = '';
+  const LICENSE_CONTACT = ''; // how to subscribe or renew, shown without a valid subscription
+  const LICENSE_REASONS = ['unknown', 'expired', 'device']; // the sheet's refusals
+  const LICENSE_CHECK_MS = 6 * 60 * MINUTE; // a valid code is checked again after this long
+  const LICENSE_RECHECK_MS = 60 * MINUTE; // a refused one (renewed since?) after this
+  const LICENSE_RETRY_MS = 10 * MINUTE; // and after the sheet couldn't be reached
+  const LICENSE_GRACE_MS = 7 * 24 * 60 * MINUTE; // the features run this long without an answer
+  const LICENSE_WARN_DAYS = 3; // the pill warns this many days before the end date
+  const LICENSE_TIMEOUT_MS = 15 * 1000;
+  const LOCK_RELOAD_GUARD_MS = MINUTE; // lock() reloads the page at most this often
   const WASH_KEEP_MS = 24 * 60 * MINUTE; // wash start times are forgotten after a day
   const ALERT_KEEP_MS = 24 * 60 * MINUTE; // and so are the red alerts already given
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
@@ -195,6 +209,27 @@
     unreadable: '⚠ ما قدرت أقرأ أوقات الغسلات',
     morePages: '⚠ فيه صفحات ثانية',
     timezone: '⚠ توقيت الجهاز مو توقيت السعودية',
+    licenseEnds: (days) =>
+      days <= 0
+        ? '⚠ الاشتراك ينتهي اليوم'
+        : days === 1
+          ? '⚠ الاشتراك ينتهي بكرة'
+          : days === 2
+            ? '⚠ الاشتراك ينتهي بعد يومين'
+            : `⚠ الاشتراك ينتهي بعد ${days} أيام`,
+    // Without a valid subscription, by licenseState().
+    lockTitle: '🔒 مساعد حجوزات سويتر',
+    lockReasons: {
+      nocode: 'اكتب كود الاشتراك عشان تشتغل الإضافة',
+      pending: 'ما قدرت أتحقق من الكود، تأكد من الإنترنت وجرّب مرة ثانية',
+      unknown: 'الكود غير صحيح',
+      expired: (until) => (until ? `انتهى اشتراكك بتاريخ ${until}` : 'انتهى اشتراكك'),
+      device: 'الكود مفعّل على جهاز ثاني، تواصل معنا لنقله لهذا الجهاز',
+      stale: 'ما قدرت أتحقق من الاشتراك من أسبوع، تأكد من الإنترنت واضغط «تفعيل»',
+    },
+    checkingLicense: 'جارٍ التحقق من الاشتراك…',
+    codeLabel: 'كود الاشتراك',
+    activate: 'تفعيل',
   };
 
   // Already running in this page: injected twice, or both the extension (its own JS world) and
@@ -266,6 +301,12 @@
   let lastDates = null;
   let pill = null;
   let observer = null;
+  // The subscription: the sheet's last answer about the code typed here (every tab sees it).
+  let license = loadLicense();
+  let licenseActive = licenseState(Date.now()) === 'ok'; // the features run
+  let licenseChecking = null; // the code being checked
+  let licenseAsked = false; // a page that loads without the features checks right away
+  let device = null; // see deviceId()
 
   // ---------- helpers ----------
 
@@ -447,7 +488,7 @@
       return;
     }
     if (entered) {
-      if (fixPageSizeOnSpaEntry()) return;
+      if (licenseActive && fixPageSizeOnSpaEntry()) return;
       nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
       phase = 'idle';
     }
@@ -480,6 +521,10 @@
   }
 
   function onStorage(event) {
+    if (event.key === 'swx:license') {
+      license = loadLicense(); // checked in another tab: the next tick follows
+      return;
+    }
     if (event.key !== 'swx:refreshMinutes') return;
     refreshMinutes = loadRefreshMinutes();
     nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
@@ -1138,6 +1183,7 @@
   }
 
   function applyAll() {
+    if (!licenseActive) return; // the table stays as the portal shows it
     const now = Date.now();
     lastApplyAt = now;
     const from = param('fromDate');
@@ -1355,7 +1401,8 @@
   function tick() {
     safe(() => {
       checkRoute();
-      if (onList()) {
+      if (onList()) tickLicense(Date.now());
+      if (onList() && licenseActive) {
         const now = Date.now();
         if (now - lastApplyAt >= REAPPLY_MS) applyAll();
         else tickWashing(now);
@@ -1371,6 +1418,161 @@
       }
       renderPill();
     });
+  }
+
+  // ---------- subscription ----------
+
+  // The sheet's last answer about the code typed in this browser: { code, ok, reason, until,
+  // okAt, nextAt }, okAt being when the sheet last said yes and nextAt when to ask it again.
+  function loadLicense() {
+    let saved = null;
+    try {
+      saved = JSON.parse(prefs.get('license') || 'null');
+    } catch {}
+    const text = (value) => (typeof value === 'string' ? value : '');
+    const time = (value) => (Number.isFinite(value) ? value : 0);
+    return {
+      code: text(saved?.code),
+      ok: saved?.ok === true,
+      reason: LICENSE_REASONS.includes(saved?.reason) ? saved.reason : '',
+      until: text(saved?.until),
+      okAt: time(saved?.okAt),
+      nextAt: time(saved?.nextAt),
+    };
+  }
+
+  function saveLicense(next) {
+    license = next;
+    prefs.set('license', JSON.stringify(next));
+  }
+
+  // This browser, for the sheet that lets a code run on one device: random, made once.
+  function deviceId() {
+    let id = prefs.get('device');
+    if (!/^[a-f0-9]{24}$/.test(id || '')) {
+      const bytes = crypto.getRandomValues(new Uint8Array(12));
+      id = device || Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+      prefs.set('device', id);
+    }
+    device = id; // kept for this page should the storage be blocked
+    return id;
+  }
+
+  // The day in Saudi Arabia, as the sheet counts them: "2026-10-18".
+  function riyadhDay(ms) {
+    return new Date(ms - RIYADH_TZ_OFFSET * MINUTE).toISOString().slice(0, 10);
+  }
+
+  // 'ok' while the features may run: the sheet said yes to the code, its end date hasn't passed
+  // and the sheet answered within LICENSE_GRACE_MS. Otherwise why not: 'nocode', 'pending' (typed
+  // but not confirmed yet), 'unknown', 'expired', 'device' (taken by another device) or 'stale'.
+  function licenseState(now) {
+    if (!LICENSE_URL) return 'ok';
+    if (!license.code) return 'nocode';
+    if (!license.ok) return license.reason || 'pending';
+    if (license.until && license.until < riyadhDay(now)) return 'expired';
+    return now - license.okAt < LICENSE_GRACE_MS ? 'ok' : 'stale';
+  }
+
+  // Days left before the end date (0 on the last day), or null.
+  function licenseDaysLeft(now) {
+    if (!LICENSE_URL || !license.until) return null;
+    return Math.round(
+      (Date.parse(license.until) - Date.parse(riyadhDay(now))) / (24 * 60 * MINUTE),
+    );
+  }
+
+  // The sheet's answer, or null when it couldn't be reached or gave no verdict (the last answer
+  // then holds). Only the code and this browser's random id are sent.
+  async function askLicense(code) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LICENSE_TIMEOUT_MS);
+    try {
+      const url = new URL(LICENSE_URL);
+      url.searchParams.set('code', code);
+      url.searchParams.set('device', deviceId());
+      const response = await fetch(url, {
+        cache: 'no-store',
+        credentials: 'omit',
+        signal: controller.signal,
+      });
+      const answer = response.ok ? await response.json() : null;
+      return answer?.ok === true || LICENSE_REASONS.includes(answer?.reason) ? answer : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function checkLicense() {
+    const { code } = license;
+    licenseChecking = code;
+    licenseAsked = true;
+    saveLicense({ ...license, nextAt: Date.now() + LICENSE_RETRY_MS }); // the other tabs wait
+    renderPill();
+    const answer = await askLicense(code);
+    if (licenseChecking === code) licenseChecking = null;
+    if (license.code !== code) return; // another code typed meanwhile: its own check counts
+    const now = Date.now();
+    if (answer) {
+      const ok = answer.ok === true;
+      saveLicense({
+        code,
+        ok,
+        reason: ok ? '' : answer.reason,
+        until: typeof answer.until === 'string' ? answer.until : '',
+        okAt: ok ? now : 0,
+        nextAt: now + (ok ? LICENSE_CHECK_MS : LICENSE_RECHECK_MS),
+      });
+    }
+    tickLicense(now);
+    renderPill();
+  }
+
+  // Every second on the list: asks the sheet when it's time, and starts or stops the features
+  // when its answer (or the clock) says so.
+  function tickLicense(now) {
+    if (!LICENSE_URL) return;
+    const due = now >= license.nextAt || (!licenseActive && !licenseAsked);
+    if (license.code && licenseChecking == null && due) checkLicense().catch(markError);
+    const active = licenseState(now) === 'ok';
+    if (active && !licenseActive) unlock();
+    else if (!active && licenseActive) lock();
+  }
+
+  // The subscription ended (or went unconfirmed too long) with the page open: it loads again
+  // without the features, so no row stays hidden, coloured or moved.
+  function lock() {
+    licenseActive = false;
+    panelOpen = editorOpen = false;
+    // At most once a minute, should the storage not keep the answer.
+    if (Date.now() - (Number(store.get('lockedAt')) || 0) < LOCK_RELOAD_GUARD_MS) return;
+    store.set('lockedAt', Date.now());
+    location.reload();
+  }
+
+  // A code accepted (or renewed) with the page open: nothing was touched meanwhile, so the
+  // features start right away, once the page shows the whole day.
+  function unlock() {
+    licenseActive = true;
+    if (needsPageSize()) {
+      location.replace(pageSizeUrl());
+      return;
+    }
+    nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
+    phase = 'idle';
+    applyAll();
+  }
+
+  // The pill's «تفعيل»: the code typed is saved and checked; a valid one starts the features.
+  function activate(text) {
+    const code = norm(text).toUpperCase();
+    if (!code) return pill?.code.focus();
+    if (code !== license.code) {
+      saveLicense({ code, ok: false, reason: '', until: '', okAt: 0, nextAt: 0 });
+    }
+    if (licenseChecking !== code) checkLicense().catch(markError);
   }
 
   // ---------- status pill ----------
@@ -1435,11 +1637,21 @@
     .status:hover { background: none; text-decoration: underline; }
     .panel.refresh { width: min(360px, calc(100vw - 32px)); }
     .refresh-form { display: flex; align-items: center; gap: 8px; padding: 4px 0 8px; }
-    .refresh-form input {
-      width: 5em; font: inherit; color: inherit; text-align: center;
+    .refresh-form input, .lock input {
+      font: inherit; color: inherit; text-align: center;
       background: transparent; border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
       border-radius: 8px; padding: 2px 6px;
     }
+    .refresh-form input { width: 5em; }
+    /* No valid subscription: the pill asks for the code instead. */
+    .lock {
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+      max-width: 340px; padding: 2px 0; white-space: normal; text-align: center;
+    }
+    .lock-title { font-weight: 700; }
+    .lock-row { display: flex; align-items: center; gap: 8px; }
+    .lock input { width: 11em; text-transform: uppercase; }
+    .lock-contact { font-size: 12px; opacity: 0.8; }
     .presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
     .hint { padding-top: 6px; font-size: 12px; opacity: 0.7; white-space: normal; }
     .error { padding-top: 6px; font-size: 12px; color: #ef4444; white-space: normal; }
@@ -1524,6 +1736,16 @@
           </span>
           <span class="part warn" hidden><span class="sep">·</span><span class="warn-text"></span></span>
         </div>
+        <form class="lock" novalidate hidden>
+          <div class="lock-title">${TXT.lockTitle}</div>
+          <div class="lock-text" role="status"></div>
+          <div class="lock-row">
+            <input class="code" type="text" dir="ltr" autocomplete="off" autocapitalize="characters"
+              spellcheck="false" placeholder="SWX-XXXX-XXXX" aria-label="${TXT.codeLabel}">
+            <button type="submit" class="activate">${TXT.activate}</button>
+          </div>
+          <div class="lock-contact" hidden></div>
+        </form>
       </div>`;
     const find = (selector) => shadow.querySelector(selector);
     pill = {
@@ -1553,7 +1775,20 @@
       editor: find('.panel.refresh'),
       minutes: find('.minutes'),
       error: find('.error'),
+      rows: shadow.querySelectorAll('.pill > .row'),
+      lock: find('.lock'),
+      lockText: find('.lock-text'),
+      code: find('.code'),
+      activate: find('.activate'),
     };
+    pill.code.value = license.code;
+    const contact = find('.lock-contact');
+    contact.textContent = LICENSE_CONTACT;
+    contact.hidden = !LICENSE_CONTACT;
+    pill.lock.addEventListener('submit', (event) => {
+      event.preventDefault();
+      safe(() => activate(pill.code.value));
+    });
     pill.late.title = TXT.lateTitle;
     pill.toggle.title = TXT.toggleTitle;
     pill.toggle.addEventListener('click', toggleShowPast);
@@ -1680,7 +1915,19 @@
     if (stats.rows > 0 && stats.parsed === 0) list.push(TXT.unreadable);
     if (hasOtherPages()) list.push(TXT.morePages);
     if (new Date().getTimezoneOffset() !== RIYADH_TZ_OFFSET) list.push(TXT.timezone);
+    const days = licenseDaysLeft(Date.now());
+    if (days != null && days <= LICENSE_WARN_DAYS) list.push(TXT.licenseEnds(days));
     return list;
+  }
+
+  // Without a valid subscription: why, and the code box.
+  function renderLock(p) {
+    p.panel.hidden = p.editor.hidden = true;
+    const reason = TXT.lockReasons[licenseState(Date.now())] || '';
+    const until = license.until && license.until.split('-').reverse().join('/'); // 30/11/2026
+    const text = typeof reason === 'function' ? reason(until) : reason;
+    setText(p.lockText, licenseChecking != null ? TXT.checkingLicense : text);
+    p.activate.disabled = licenseChecking != null;
   }
 
   function renderPill() {
@@ -1690,6 +1937,13 @@
     p.host.style.setProperty('display', visible ? 'block' : 'none', 'important');
     if (!visible) {
       markTitle(0);
+      return;
+    }
+    p.lock.hidden = licenseActive;
+    for (const row of p.rows) row.hidden = !licenseActive;
+    if (!licenseActive) {
+      markTitle(0);
+      renderLock(p);
       return;
     }
     setText(p.status, statusText());
@@ -1756,7 +2010,7 @@
     });
   }
 
-  safe(fixPageSizeEarly);
+  if (licenseActive) safe(fixPageSizeEarly);
   lastHref = location.href;
   wasOnList = onList();
   if (wasOnList) noteTrackedDay();
