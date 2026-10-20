@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         مساعد حجوزات سويتر
 // @namespace    https://github.com/HadiTAG7/Chrome-extantion-sweater
-// @version      1.15.0
+// @version      1.16.0
 // @description  يخفي الغسلات اللي خلصت، يرتّبها، ينبّه على المتأخرة والجديدة، يحسب وقت الغسيل، ويحدّث صفحة الحجوزات تلقائياً.
 // @homepageURL  https://github.com/HadiTAG7/Chrome-extantion-sweater
 // @icon         https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/icons/icon48.png
@@ -83,7 +83,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.15.0';
+  const VERSION = '1.16.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -189,6 +189,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     hide: 'إخفاء',
     toggleTitle: `إظهار أو إخفاء الغسلات اللي خلصت، والملغية اللي عدى موعدها أكثر من ${GRACE_MINUTES} دقيقة`,
     noUpcoming: 'لا توجد غسلات باقية',
+    noUpcomingHere: 'كل غسلات هالصفحة خلصت، والباقية في الصفحات الثانية',
     sortedBy: 'الترتيب:',
     resetSort: 'رجوع للوقت',
     sortNames: {
@@ -478,11 +479,24 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     if (onList() && needsPageSize()) history.replaceState(history.state, '', pageSizeUrl());
   }
 
-  // Entering the list through in-app navigation (the sidebar link carries no pageSize).
-  function fixPageSizeOnSpaEntry() {
+  // The list without the whole day once the page is up: entered through in-app navigation (the
+  // sidebar link carries no pageSize), or a smaller page picked in the portal's «Rows per page»,
+  // whose first page would then show only finished washes, all hidden. At most every
+  // SPA_FIX_GUARD_MS unless the user just picked it: a portal that kept dropping the size would
+  // otherwise loop. True when the page loads again.
+  function fixPageSizeInApp() {
     if (!needsPageSize()) return false;
-    if (Date.now() - (Number(store.get('psFixAt')) || 0) < SPA_FIX_GUARD_MS) return false;
-    store.set('psFixAt', Date.now());
+    const now = Date.now();
+    const recent = now - (Number(store.get('psFixAt')) || 0) < SPA_FIX_GUARD_MS;
+    if (recent && now - lastActivityAt > ACTIVITY_GRACE_MS) return false;
+    store.set('psFixAt', now);
+    if (PAGE_SOUNDS) {
+      // The phone version runs in the page's own JS world, where the portal's router follows the
+      // address: the whole day loads in place (a reload would take the sound away).
+      history.replaceState(history.state, '', pageSizeUrl());
+      lastHref = location.href;
+      return false;
+    }
     location.replace(pageSizeUrl());
     return true;
   }
@@ -524,8 +538,8 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       }
       return;
     }
+    if (licenseActive && fixPageSizeInApp()) return;
     if (entered) {
-      if (licenseActive && fixPageSizeOnSpaEntry()) return;
       nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
       phase = 'idle';
     }
@@ -1228,6 +1242,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     const next = emptyStats();
     const nextWashing = [];
     let nextBikers = [];
+    const otherPages = hasOtherPages(); // more than a page today: the rest isn't on screen
     for (const table of bookingTables()) {
       const tbody = table.tBodies[0];
       if (!tbody) continue;
@@ -1253,7 +1268,8 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       if (parsed) sortRows(tbody, items);
       if (table.parentElement) {
         const allHidden = rows > 0 && past === rows;
-        setValue(table.parentElement, ATTR_EMPTY, allHidden ? TXT.noUpcoming : null);
+        const empty = otherPages ? TXT.noUpcomingHere : TXT.noUpcoming;
+        setValue(table.parentElement, ATTR_EMPTY, allHidden ? empty : null);
       }
       next.rows += rows;
       next.parsed += parsed;
