@@ -57,7 +57,7 @@
   const ACTION_ALERTS = true; // تنبيه لما يدخل حجز في أعمدة «العمليات اليومية» (المفروض في الطريق، وصل، بدأ، خلص)
   const ACTION_ALERT_SOUND = true; // صوت «بيب بيب» مع تنبيه العمليات اليومية (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.18.0';
+  const VERSION = '1.18.1';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -87,6 +87,7 @@
   const WATCH_FRESH_MS = 10 * MINUTE; // what the watcher saw is shown (other pages) this long
   const SHARE_MS = MINUTE; // the list tells the other tabs what it shows at least this often
   const SOON_MS = 10 * MINUTE; // a Daily Operations card this close to its time turns yellow
+  const BIKERS_REFRESH_MS = 30 * MINUTE; // the active bikers (bikers panel) are read again after this
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
   const ACTIVITY_GRACE_MS = MINUTE; // no reload within a minute of a click, key or scroll...
   const MAX_ACTIVITY_POSTPONE_MS = 2 * MINUTE; // ...unless the reload is already this late
@@ -253,6 +254,8 @@
     nextWash: 'الجاية',
     allDone: 'خلّص كل غسلاته',
     noBikers: 'ما فيه غسلات',
+    idleHeading: (n) => `بدون غسلات اليوم (${n})`,
+    onLeave: 'إجازة',
     copy: 'نسخ',
     copied: 'انتسخ ✓',
     copyFailed: 'ما انتسخ',
@@ -390,6 +393,9 @@
   let alertedMemory = {}; // see loadAlerted()
   let apiDenied = 0; // the backend's refusals in a row (401: the login expired)
   let lastShare = { at: 0, signature: '' }; // see shareList()
+  let bikersList; // the active bikers and today's leave, see savedBikers()
+  let nextBikersAt = 0;
+  let idle = []; // the active bikers with no wash today, for the panel
 
   // ---------- helpers ----------
 
@@ -653,6 +659,7 @@
     }
     if (event.key === 'swx:watch') watchCache = null; // shared by another tab: read again
     if (event.key === 'swx:washStarts') washStarts = null;
+    if (event.key === 'swx:bikersList') bikersList = undefined;
     if (event.key !== 'swx:refreshMinutes') return;
     refreshMinutes = loadRefreshMinutes();
     nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
@@ -979,6 +986,76 @@
       }
     }
     return items;
+  }
+
+  // The provider's active bikers and today's leave, as the portal's Bikers page and calendar ask
+  // for them: { day, at, bikers: [{ name, zone, companyId }], leave: [companyId or name] }. Kept
+  // for every tab (read again on the storage event).
+  function savedBikers() {
+    if (bikersList === undefined) {
+      let saved = null;
+      try {
+        saved = JSON.parse(prefs.get('bikersList') || 'null');
+      } catch {}
+      bikersList =
+        saved && Array.isArray(saved.bikers) && Array.isArray(saved.leave) ? saved : null;
+    }
+    return bikersList;
+  }
+
+  // Asked when the bikers panel is open (by any tab), if what's kept is from another day or older
+  // than BIKERS_REFRESH_MS; a failed try waits a minute.
+  function refreshBikers(now) {
+    const saved = savedBikers();
+    const fresh = saved && saved.day === ymd(now) && now - saved.at < BIKERS_REFRESH_MS;
+    if (fresh || now < nextBikersAt) return;
+    nextBikersAt = now + MINUTE;
+    fetchBikers()
+      .then((list) => {
+        if (!list) return;
+        bikersList = list;
+        prefs.set('bikersList', JSON.stringify(list));
+        renderPill();
+      })
+      .catch(markError);
+  }
+
+  async function fetchBikers() {
+    const bikers = [];
+    let pages = 1;
+    for (let number = 1; number <= Math.min(pages, MAX_JOINED_PAGES); number++) {
+      const data = await apiGet(`/Bikers?PageNumber=${number}&PageSize=50&Status=1`); // 1: Active
+      if (!Array.isArray(data?.items)) return null;
+      pages = Number(data.totalPages) || 1;
+      for (const raw of data.items) {
+        const name = norm(raw?.name);
+        if (name)
+          bikers.push({ name, zone: norm(raw?.zone) || null, companyId: norm(raw?.companyId) });
+      }
+    }
+    const away = await apiGet('/calendar/bikers-on-vacation');
+    const leave = (Array.isArray(away?.today) ? away.today : [])
+      .map((raw) => norm(raw?.companyId) || norm(raw?.bikerName))
+      .filter(Boolean);
+    const now = Date.now();
+    return { day: ymd(now), at: now, bikers, leave };
+  }
+
+  // The panel's last part: the active bikers with no wash on the day it shows (those whose only
+  // bookings were cancelled too), free ones first, then those on leave, each by name.
+  function idleBikers(summaries, now) {
+    const saved = savedBikers();
+    if (!saved || saved.day !== ymd(now)) return [];
+    const busy = new Set(summaries.map((biker) => norm(biker.name).toLowerCase()));
+    const away = new Set(saved.leave);
+    return saved.bikers
+      .filter((biker) => !busy.has(biker.name.toLowerCase()))
+      .map((biker) => ({
+        name: biker.name,
+        zone: biker.zone,
+        leave: away.has(biker.companyId) || away.has(biker.name),
+      }))
+      .sort((a, b) => a.leave - b.leave || COLLATOR.compare(a.name, b.name));
   }
 
   // ---------- washes in progress ----------
@@ -2222,6 +2299,18 @@
     .doing.yellow, .upcoming.yellow { color: #f59e0b; opacity: 1; }
     .doing.red, .upcoming.red { color: #ef4444; opacity: 1; }
     .empty { padding: 8px 0; opacity: 0.7; }
+    /* The active bikers with no wash today, after the others. */
+    .nowash-head {
+      padding: 10px 0 4px; font-weight: 700; opacity: 0.85;
+      border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+    }
+    .nowash {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+      align-items: center; gap: 12px; padding: 3px 0;
+    }
+    .nowash .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nowash .zone { opacity: 0.75; }
+    .leave { color: #f59e0b; font-weight: 700; }
     /* The countdown doubles as the button that opens the refresh editor. */
     .status { border: 0; padding: 0; border-radius: 4px; }
     .status:hover { background: none; text-decoration: underline; }
@@ -2435,14 +2524,11 @@
       p.panelSignature = null;
       return;
     }
-    const signature = JSON.stringify(bikers);
+    const signature = JSON.stringify([bikers, idle]);
     if (signature === p.panelSignature) return;
     p.panelSignature = signature;
     p.list.textContent = '';
-    if (!bikers.length) {
-      p.list.append(make('div', 'empty', TXT.noBikers));
-      return;
-    }
+    if (!bikers.length) p.list.append(make('div', 'empty', TXT.noBikers));
     for (const biker of bikers) {
       const copy = make('button', 'copy', TXT.copy);
       copy.type = 'button';
@@ -2468,6 +2554,17 @@
         make('div', 'counts', TXT.bikerCounts(biker.done, biker.left)),
         current,
         copy,
+      );
+      p.list.append(row);
+    }
+    if (!idle.length) return;
+    p.list.append(make('div', 'nowash-head', TXT.idleHeading(idle.length)));
+    for (const biker of idle) {
+      const row = make('div', 'nowash');
+      row.append(
+        make('div', 'name', biker.name),
+        make('bdi', 'zone', biker.zone || '—'),
+        make('div', biker.leave ? 'leave' : 'free', biker.leave ? TXT.onLeave : ''),
       );
       p.list.append(row);
     }
@@ -2573,6 +2670,8 @@
     const list = warnings();
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
+    if (panelOpen && listCoversDay()) refreshBikers(Date.now());
+    idle = panelOpen && listCoversDay() ? idleBikers(bikers, Date.now()) : [];
     renderPanel(p);
   }
 
@@ -2613,6 +2712,8 @@
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
     bikers = panelOpen && view.items ? summarizeBikers(view.items, now) : [];
+    if (panelOpen && view.items) refreshBikers(now);
+    idle = panelOpen && view.items ? idleBikers(bikers, now) : [];
     renderPanel(p);
   }
 
