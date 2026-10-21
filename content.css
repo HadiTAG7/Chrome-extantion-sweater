@@ -133,6 +133,67 @@ html:not([data-swx-show-past]) [data-swx-empty]::after {
   content: '\00a0↓';
 }
 
+/* Daily Operations: each list's cards in order of their time (the extension sets their CSS
+   order, leaving React's nodes where they are), coloured when close to or past it, with how late
+   they are after the time, and call and WhatsApp links after the biker's number. */
+#root [data-swx-ops] {
+  display: flex !important;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+#root [data-swx-ops] > * {
+  margin: 0 !important;
+}
+
+#root [data-swx-ops] > [data-swx-tone='yellow'] {
+  background-color: rgba(234, 179, 8, 0.12) !important;
+}
+
+#root [data-swx-ops] > [data-swx-tone='red'] {
+  background-color: rgba(239, 68, 68, 0.14) !important;
+}
+
+#root [data-swx-ops] [data-swx-note]::after {
+  display: inline;
+  margin-inline-start: 6px;
+}
+
+#root [data-swx-ops] > [data-swx-tone='yellow'] [data-swx-note]::after {
+  color: #f59e0b;
+}
+
+#root [data-swx-ops] > [data-swx-tone='red'] [data-swx-note]::after {
+  color: #ef4444;
+}
+
+#root .swx-contact {
+  display: inline-flex;
+  gap: 4px;
+  margin-inline-start: auto;
+}
+
+#root .swx-contact a {
+  padding: 0 6px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  border-radius: 999px;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+#root .swx-contact a:hover {
+  background: var(--accent, rgba(127, 127, 127, 0.15));
+}
+
+#root .swx-contact .swx-chat {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
 @media print {
   swx-pill {
     display: none !important;

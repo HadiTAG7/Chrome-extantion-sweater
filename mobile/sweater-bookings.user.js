@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         مساعد حجوزات سويتر
 // @namespace    https://github.com/HadiTAG7/Chrome-extantion-sweater
-// @version      1.17.0
+// @version      1.18.0
 // @description  يخفي الغسلات اللي خلصت، يرتّبها، ينبّه على المتأخرة والجديدة، يحسب وقت الغسيل، ويحدّث صفحة الحجوزات تلقائياً.
 // @homepageURL  https://github.com/HadiTAG7/Chrome-extantion-sweater
 // @icon         https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/icons/icon48.png
@@ -24,7 +24,7 @@
     if (!parent) return false;
     const style = document.createElement('style');
     style.id = 'swx-css';
-    style.textContent = "/* مساعد حجوزات سويتر: content.js marks the rows, these rules show or hide them. */\n\n/* Finished washes, and cancelled bookings whose slot started more than GRACE_MINUTES ago. */\nhtml:not([data-swx-show-past]) tr[data-swx-past] {\n  display: none !important;\n}\n\n/* \"Show\" toggled on from the pill: keep them visible but dimmed. */\nhtml[data-swx-show-past] tr[data-swx-past] {\n  opacity: 0.45;\n}\n\n/* Every booking on the page is hidden: say so under the table instead of showing an empty body. */\nhtml:not([data-swx-show-past]) [data-swx-empty]::after {\n  content: attr(data-swx-empty);\n  display: block;\n  padding: 2rem 1rem;\n  text-align: center;\n  opacity: 0.7;\n  font:\n    500 14px/1.6 Tajawal,\n    system-ui,\n    sans-serif;\n}\n\n/* The biker's wash number of the day (\"2/4\"), after the mobile number under the name. */\n#root [data-swx-seq]::after {\n  content: attr(data-swx-seq);\n  margin-inline-start: 8px;\n  padding: 0 6px;\n  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));\n  border-radius: 999px;\n  background: var(--muted, rgba(127, 127, 127, 0.15));\n  color: var(--foreground, inherit);\n  font-size: 11px;\n  font-weight: 600;\n  line-height: 16px;\n  white-space: nowrap;\n  unicode-bidi: isolate; /* \"2/4\" stays \"2/4\" in the Arabic (rtl) layout too */\n}\n\n/* Still \"Initiated\" or \"On the Way\" (the biker isn't there yet) close to, or past, the booking\n   time: yellow, then red. Washing: green, then yellow and red when the wash runs long. */\n#root tr[data-swx-tone='green'] {\n  background-color: rgba(34, 197, 94, 0.16) !important;\n}\n\n#root tr[data-swx-tone='yellow'] {\n  background-color: rgba(234, 179, 8, 0.16) !important;\n}\n\n#root tr[data-swx-tone='red'] {\n  background-color: rgba(239, 68, 68, 0.2) !important;\n}\n\n/* \"باقي 8 د\" / \"متأخرة 25 د\" / \"يغسل 47:12\" under the booking time. */\n#root [data-swx-note]::after {\n  content: attr(data-swx-note);\n  display: block;\n  font-size: 11px;\n  font-weight: 700;\n  line-height: 14px;\n  white-space: nowrap;\n  font-variant-numeric: tabular-nums; /* the ticking timer keeps its width */\n}\n\n#root tr[data-swx-tone='green'] [data-swx-note]::after {\n  color: #16a34a;\n}\n\n#root tr[data-swx-tone='yellow'] [data-swx-note]::after {\n  color: #f59e0b;\n}\n\n#root tr[data-swx-tone='red'] [data-swx-note]::after {\n  color: #ef4444;\n}\n\n/* A booking that wasn't there at the earlier refreshes, or that was cancelled since (red, and it\n   wins when both apply to the same booking). */\n#root [data-swx-new]::after,\n#root [data-swx-cancelled]::after {\n  content: 'جديد';\n  display: block;\n  width: fit-content;\n  margin-top: 2px;\n  padding: 0 6px;\n  border-radius: 999px;\n  background: #16a34a;\n  color: #fff;\n  font-size: 11px;\n  font-weight: 700;\n  line-height: 16px;\n}\n\n#root [data-swx-cancelled]::after {\n  content: 'ألغي';\n  background: #dc2626;\n}\n\n/* Service time without the portal's long decimals: the original text is hidden, not changed. */\n#root [data-swx-service] {\n  font-size: 0 !important;\n}\n\n#root [data-swx-service]::after {\n  content: attr(data-swx-service);\n  font-size: 0.875rem;\n}\n\n/* Booking Time and Biker headers: the portal can't sort them, the extension can. */\n#root thead th[data-swx-sortable] {\n  cursor: pointer;\n  user-select: none;\n}\n\n#root thead th[data-swx-sortable]:hover > div {\n  text-decoration: underline;\n}\n\n/* The arrow follows the label in a zero-width box, so the column keeps its width. */\n#root thead th[data-swx-sortable][aria-sort] > div::after {\n  display: inline-block;\n  width: 0;\n  white-space: nowrap;\n}\n\n#root thead th[data-swx-sortable][aria-sort='ascending'] > div::after {\n  content: '\\00a0↑';\n}\n\n#root thead th[data-swx-sortable][aria-sort='descending'] > div::after {\n  content: '\\00a0↓';\n}\n\n@media print {\n  swx-pill {\n    display: none !important;\n  }\n}\n";
+    style.textContent = "/* مساعد حجوزات سويتر: content.js marks the rows, these rules show or hide them. */\n\n/* Finished washes, and cancelled bookings whose slot started more than GRACE_MINUTES ago. */\nhtml:not([data-swx-show-past]) tr[data-swx-past] {\n  display: none !important;\n}\n\n/* \"Show\" toggled on from the pill: keep them visible but dimmed. */\nhtml[data-swx-show-past] tr[data-swx-past] {\n  opacity: 0.45;\n}\n\n/* Every booking on the page is hidden: say so under the table instead of showing an empty body. */\nhtml:not([data-swx-show-past]) [data-swx-empty]::after {\n  content: attr(data-swx-empty);\n  display: block;\n  padding: 2rem 1rem;\n  text-align: center;\n  opacity: 0.7;\n  font:\n    500 14px/1.6 Tajawal,\n    system-ui,\n    sans-serif;\n}\n\n/* The biker's wash number of the day (\"2/4\"), after the mobile number under the name. */\n#root [data-swx-seq]::after {\n  content: attr(data-swx-seq);\n  margin-inline-start: 8px;\n  padding: 0 6px;\n  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));\n  border-radius: 999px;\n  background: var(--muted, rgba(127, 127, 127, 0.15));\n  color: var(--foreground, inherit);\n  font-size: 11px;\n  font-weight: 600;\n  line-height: 16px;\n  white-space: nowrap;\n  unicode-bidi: isolate; /* \"2/4\" stays \"2/4\" in the Arabic (rtl) layout too */\n}\n\n/* Still \"Initiated\" or \"On the Way\" (the biker isn't there yet) close to, or past, the booking\n   time: yellow, then red. Washing: green, then yellow and red when the wash runs long. */\n#root tr[data-swx-tone='green'] {\n  background-color: rgba(34, 197, 94, 0.16) !important;\n}\n\n#root tr[data-swx-tone='yellow'] {\n  background-color: rgba(234, 179, 8, 0.16) !important;\n}\n\n#root tr[data-swx-tone='red'] {\n  background-color: rgba(239, 68, 68, 0.2) !important;\n}\n\n/* \"باقي 8 د\" / \"متأخرة 25 د\" / \"يغسل 47:12\" under the booking time. */\n#root [data-swx-note]::after {\n  content: attr(data-swx-note);\n  display: block;\n  font-size: 11px;\n  font-weight: 700;\n  line-height: 14px;\n  white-space: nowrap;\n  font-variant-numeric: tabular-nums; /* the ticking timer keeps its width */\n}\n\n#root tr[data-swx-tone='green'] [data-swx-note]::after {\n  color: #16a34a;\n}\n\n#root tr[data-swx-tone='yellow'] [data-swx-note]::after {\n  color: #f59e0b;\n}\n\n#root tr[data-swx-tone='red'] [data-swx-note]::after {\n  color: #ef4444;\n}\n\n/* A booking that wasn't there at the earlier refreshes, or that was cancelled since (red, and it\n   wins when both apply to the same booking). */\n#root [data-swx-new]::after,\n#root [data-swx-cancelled]::after {\n  content: 'جديد';\n  display: block;\n  width: fit-content;\n  margin-top: 2px;\n  padding: 0 6px;\n  border-radius: 999px;\n  background: #16a34a;\n  color: #fff;\n  font-size: 11px;\n  font-weight: 700;\n  line-height: 16px;\n}\n\n#root [data-swx-cancelled]::after {\n  content: 'ألغي';\n  background: #dc2626;\n}\n\n/* Service time without the portal's long decimals: the original text is hidden, not changed. */\n#root [data-swx-service] {\n  font-size: 0 !important;\n}\n\n#root [data-swx-service]::after {\n  content: attr(data-swx-service);\n  font-size: 0.875rem;\n}\n\n/* Booking Time and Biker headers: the portal can't sort them, the extension can. */\n#root thead th[data-swx-sortable] {\n  cursor: pointer;\n  user-select: none;\n}\n\n#root thead th[data-swx-sortable]:hover > div {\n  text-decoration: underline;\n}\n\n/* The arrow follows the label in a zero-width box, so the column keeps its width. */\n#root thead th[data-swx-sortable][aria-sort] > div::after {\n  display: inline-block;\n  width: 0;\n  white-space: nowrap;\n}\n\n#root thead th[data-swx-sortable][aria-sort='ascending'] > div::after {\n  content: '\\00a0↑';\n}\n\n#root thead th[data-swx-sortable][aria-sort='descending'] > div::after {\n  content: '\\00a0↓';\n}\n\n/* Daily Operations: each list's cards in order of their time (the extension sets their CSS\n   order, leaving React's nodes where they are), coloured when close to or past it, with how late\n   they are after the time, and call and WhatsApp links after the biker's number. */\n#root [data-swx-ops] {\n  display: flex !important;\n  flex-direction: column;\n  gap: 0.5rem;\n}\n\n#root [data-swx-ops] > * {\n  margin: 0 !important;\n}\n\n#root [data-swx-ops] > [data-swx-tone='yellow'] {\n  background-color: rgba(234, 179, 8, 0.12) !important;\n}\n\n#root [data-swx-ops] > [data-swx-tone='red'] {\n  background-color: rgba(239, 68, 68, 0.14) !important;\n}\n\n#root [data-swx-ops] [data-swx-note]::after {\n  display: inline;\n  margin-inline-start: 6px;\n}\n\n#root [data-swx-ops] > [data-swx-tone='yellow'] [data-swx-note]::after {\n  color: #f59e0b;\n}\n\n#root [data-swx-ops] > [data-swx-tone='red'] [data-swx-note]::after {\n  color: #ef4444;\n}\n\n#root .swx-contact {\n  display: inline-flex;\n  gap: 4px;\n  margin-inline-start: auto;\n}\n\n#root .swx-contact a {\n  padding: 0 6px;\n  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));\n  border-radius: 999px;\n  color: inherit;\n  font-size: 11px;\n  font-weight: 600;\n  line-height: 16px;\n  text-decoration: none;\n  white-space: nowrap;\n}\n\n#root .swx-contact a:hover {\n  background: var(--accent, rgba(127, 127, 127, 0.15));\n}\n\n#root .swx-contact .swx-chat {\n  border-color: #16a34a;\n  color: #16a34a;\n}\n\n@media print {\n  swx-pill {\n    display: none !important;\n  }\n}\n";
     parent.appendChild(style);
     return true;
   };
@@ -180,6 +180,13 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
  *   - with subscriptions set up (LICENSE_URL), does all this for a valid code only: the owner's
  *     Google Sheet says which (tools/subscriptions.gs), and the pill asks for the code otherwise.
  *
+ * And on the portal's other pages:
+ *   - keeps the alerts going (the day's bookings read from the portal's backend), with a short
+ *     pill and the red count in the title; one tab watches for all of them, and an alert is given
+ *     once whichever tab or page saw it first,
+ *   - alerts when a booking enters one of the Daily Operations lists, and on that page shows how
+ *     late each card is, the latest first, with call and WhatsApp links for the biker.
+ *
  * The portal is a React SPA whose table rows are keyed by index: React rewrites the text of
  * existing <tr>s in place. So every pass re-reads the rows from their text, rows are never
  * removed, and they are only reordered inside their own <tbody>.
@@ -203,8 +210,11 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const RED_ALERTS = true; // تنبيه (إشعار وصوت) لما غسلة تصير حمراء، مرة وحدة لكل غسلة
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
+  const ALL_PAGES_ALERTS = true; // التنبيهات (الجديدة والملغية والمتأخرة) تشتغل وأنت في أي صفحة بالبوابة، مو بس صفحة الحجوزات
+  const ACTION_ALERTS = true; // تنبيه لما يدخل حجز في أعمدة «العمليات اليومية» (المفروض في الطريق، وصل، بدأ، خلص)
+  const ACTION_ALERT_SOUND = true; // صوت «بيب بيب» مع تنبيه العمليات اليومية (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.17.0';
+  const VERSION = '1.18.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -228,7 +238,12 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const LICENSE_TIMEOUT_MS = 15 * 1000;
   const LOCK_RELOAD_GUARD_MS = MINUTE; // lock() reloads the page at most this often
   const WASH_KEEP_MS = 24 * 60 * MINUTE; // wash start times are forgotten after a day
-  const ALERT_KEEP_MS = 24 * 60 * MINUTE; // and so are the red alerts already given
+  const ALERTED_KEEP_MS = 48 * 60 * MINUTE; // the alerts already given (by any tab) are kept this long
+  const WATCH_MS = 2 * MINUTE; // the day's bookings from the backend, away from the bookings list
+  const ACTIONS_WATCH_MS = MINUTE; // the Daily Operations lists, at the portal's own pace
+  const WATCH_FRESH_MS = 10 * MINUTE; // what the watcher saw is shown (other pages) this long
+  const SHARE_MS = MINUTE; // the list tells the other tabs what it shows at least this often
+  const SOON_MS = 10 * MINUTE; // a Daily Operations card this close to its time turns yellow
   const REAPPLY_MS = 15 * 1000; // re-check the times so rows disappear as the clock moves
   const ACTIVITY_GRACE_MS = MINUTE; // no reload within a minute of a click, key or scroll...
   const MAX_ACTIVITY_POSTPONE_MS = 2 * MINUTE; // ...unless the reload is already this late
@@ -240,9 +255,13 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const SPA_FIX_GUARD_MS = 30 * 1000;
   const MAX_JOINED_PAGES = 10; // a day's pages are joined up to this many (1000 bookings)
   const RIYADH_TZ_OFFSET = -180; // Date#getTimezoneOffset() in Saudi Arabia (UTC+3, no DST)
-  const TITLE_PREFIX_RE = /^🔴 \d+ · /; // the red count this script puts before the tab's title
+  // The count this script puts before the tab's title: red bookings, or the Daily Operations cards.
+  const TITLE_PREFIX_RE = /^(?:🔴|⚠) \d+ · /;
 
   const LIST_PATH_RE = /^\/bookings\/?$/;
+  const LIST_PATH = '/bookings';
+  const OPS_PATH_RE = /^\/daily-operations\/?$/;
+  const OPS_PATH = '/daily-operations';
   const HEADERS = {
     date: ['booking date', 'تاريخ الحجز'],
     time: ['booking time', 'وقت الحجز'],
@@ -264,6 +283,28 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const REACHED_RE = /^(reached|وصل)$/i;
   // Washing now: the timer runs from the start of the service.
   const WASHING_RE = /^(washing started|start_wash|بدأ الغسيل)$/i;
+  // The portal's (Arabic) names for the backend's status codes, for the bookings read from it.
+  const STATUS_LABELS = {
+    pending: 'قيد الانتظار',
+    initiated: 'معتمدة',
+    on_way: 'في الطريق',
+    cancel_admin: 'ألغيت من المسؤول',
+    cancel_client: 'ألغيت من العميل',
+    reached: 'وصل',
+    start_wash: 'بدأ الغسيل',
+    collect_payment: 'تحصيل الدفع',
+    end_visit: 'اكتملت الزيارة',
+    failed: 'فشلت',
+    rescheduled: 'معاد جدولتها',
+  };
+  // The Daily Operations lists, in the portal's order (its endpoints), and the alert a booking
+  // entering each one counts as: late, or washing too long (the same as a red row, see alertOnce).
+  const ACTIONS = [
+    { kind: 'expected-on-way', alert: 'late' },
+    { kind: 'should-arrive', alert: 'late' },
+    { kind: 'should-start-wash', alert: 'late' },
+    { kind: 'should-finish', alert: 'wash' },
+  ];
   // The portal's empty table (as opposed to its loading or error row).
   const EMPTY_RE = /no bookings found|لم يتم العثور على حجوزات/i;
   const SORT_KEYS = ['time', 'biker', 'zone', 'id', 'service'];
@@ -288,6 +329,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const ATTR_NEW = 'data-swx-new';
   const ATTR_CANCELLED = 'data-swx-cancelled';
   const ATTR_SERVICE = 'data-swx-service';
+  const ATTR_OPS = 'data-swx-ops'; // a Daily Operations list, its cards in time order
 
   const TXT = {
     refreshIn: 'التحديث بعد',
@@ -304,7 +346,22 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       'swx:new-bookings': (n) => (n === 1 ? 'حجز جديد' : `حجوزات جديدة (${n})`),
       'swx:red-alert': (n) => (n === 1 ? 'تنبيه تأخير' : `تنبيهات تأخير (${n})`),
       'swx:cancelled': (n) => (n === 1 ? 'حجز ملغي' : `حجوزات ملغية (${n})`),
+      'swx:action-needed': (n) => (n === 1 ? 'يحتاج إجراء' : `تحتاج إجراء (${n})`),
     },
+    // The Daily Operations lists, in the alerts.
+    actionNames: {
+      'expected-on-way': 'المفروض في الطريق',
+      'should-arrive': 'المفروض وصل',
+      'should-start-wash': 'المفروض بدأ الغسيل',
+      'should-finish': 'المفروض خلص',
+    },
+    toBookings: 'الحجوزات',
+    toBookingsTitle: 'فتح صفحة الحجوزات',
+    loginExpired: '⚠ سجّل دخول من جديد عشان التنبيهات',
+    call: '📞',
+    callTitle: (phone) => `اتصال على ${phone}`,
+    whatsapp: 'واتساب',
+    whatsappTitle: (phone) => `واتساب ${phone}`,
     offline: 'لا يوجد اتصال — إعادة المحاولة بعد قليل',
     pastCount: 'الغسلات المخفية:',
     show: 'إظهار',
@@ -439,6 +496,15 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   // its own from background.js.
   const PAGE_SOUNDS = window.__swxSounds || null;
   const PAGE_WORLD = Boolean(PAGE_SOUNDS); // the phone version runs in the page's own JS world
+  // Web Locks, where this script can use them: not in Firefox's content scripts, whose functions
+  // and promises the page's lock manager isn't allowed to touch.
+  const LOCKS = (() => {
+    try {
+      return !globalThis.browser?.runtime?.id && navigator.locks?.request ? navigator.locks : null;
+    } catch {
+      return null;
+    }
+  })();
   let pagesJoined = false; // see joinPages
   let players = {}; // one <audio> per sound, see player()
   // Firefox on Android only learns the site's autoplay setting (from the app) once the page has
@@ -469,6 +535,18 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   let licenseChecking = null; // the code being checked
   let licenseAsked = false; // a page that loads without the features checks right away
   let device = null; // see deviceId()
+  // Away from the list: one tab watches the backend for all of them (see startWatch).
+  let watchLeader = false;
+  let watchBusy = false; // reading the day's bookings
+  let actionsBusy = false; // reading the Daily Operations lists
+  let nextWatchAt = 0;
+  let nextActionsAt = 0;
+  let lastRedCheckAt = 0;
+  let watchItems = null; // the day's bookings the watching tab last read
+  let watchCache = null; // what the watcher (or the list) last shared, see sharedWatch()
+  let alertedMemory = {}; // see loadAlerted()
+  let apiDenied = 0; // the backend's refusals in a row (401: the login expired)
+  let lastShare = { at: 0, signature: '' }; // see shareList()
 
   // ---------- helpers ----------
 
@@ -478,6 +556,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
   const onList = () => LIST_PATH_RE.test(location.pathname);
+  const onOps = () => OPS_PATH_RE.test(location.pathname);
 
   function markError(error) {
     console.warn('[Sweater helper]', error);
@@ -650,6 +729,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   function checkRoute() {
     if (location.href === lastHref) return;
     lastHref = location.href;
+    if (onOps()) nextActionsAt = 0; // its lists, fresh as the page opens (in place too)
     const nowOnList = onList();
     const entered = nowOnList && !wasOnList;
     wasOnList = nowOnList;
@@ -728,6 +808,8 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       license = loadLicense(); // checked in another tab: the next tick follows
       return;
     }
+    if (event.key === 'swx:watch') watchCache = null; // shared by another tab: read again
+    if (event.key === 'swx:washStarts') washStarts = null;
     if (event.key !== 'swx:refreshMinutes') return;
     refreshMinutes = loadRefreshMinutes();
     nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
@@ -966,6 +1048,96 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     return late > 0 ? TXT.minutesLate(late) : TXT.dueNow;
   }
 
+  // ---------- the portal's backend ----------
+
+  // The portal's own request headers, with its login (its cookies). Null while logged out.
+  function apiHeaders() {
+    const token = cookie('access_token');
+    if (!token) return null;
+    const headers = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Accept-Language': cookie('lang') || 'en',
+    };
+    const provider = cookie('selected_service_provider');
+    if (provider) headers['X-Service-Provider-Id'] = provider;
+    return headers;
+  }
+
+  // A GET the way the portal makes it: the answer's data, or null (logged out, refused,
+  // unreachable or too slow). Refusals in a row mean the login expired: the pill says so.
+  async function apiGet(path) {
+    const headers = apiHeaders();
+    if (!headers) return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${API_BASE}${path}`, {
+        headers,
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      apiDenied = response.status === 401 ? apiDenied + 1 : 0;
+      if (!response.ok) return null;
+      const body = await response.json();
+      return body?.data ?? null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  const numberId = (value) => (/^\d+$/.test(String(value ?? '')) ? Number(value) : null);
+
+  // A booking from the backend in the shape rowInfo() reads from the table (without its cells):
+  // what the alerts, the colours and the bikers panel work from.
+  function apiBooking(raw) {
+    const date = parseDate(raw?.bookingDate);
+    const time = parseTime(raw?.timeSlotStartTime);
+    const status = norm(raw?.status);
+    const name = norm(raw?.bikerFirstName);
+    const id = numberId(raw?.id);
+    return {
+      data: true,
+      ts: date && time ? new Date(date.y, date.m, date.d, time.h, time.mi).getTime() : null,
+      id,
+      idText: id == null ? '' : String(id),
+      biker: name ? `${name}${norm(raw?.bikerMobile)}` : null, // as the table's cell reads
+      bikerName: name || null,
+      companyId: norm(raw?.bikerCompanyId) || null,
+      statusText: STATUS_LABELS[status] || status,
+      cancelled: CANCELLED_RE.test(status),
+      done: DONE_RE.test(status),
+      initiated: INITIATED_RE.test(status),
+      onWay: ON_WAY_RE.test(status),
+      reached: REACHED_RE.test(status),
+      washing: WASHING_RE.test(status),
+      zone: norm(raw?.zoneName) || null,
+    };
+  }
+
+  // A day's bookings, all of it (PAGE_SIZE a request, like the portal asks), or null when a page
+  // couldn't be read.
+  async function fetchDay(day) {
+    const items = [];
+    const seen = new Set();
+    let pages = 1;
+    for (let number = 1; number <= Math.min(pages, MAX_JOINED_PAGES); number++) {
+      const query = `PageNumber=${number}&PageSize=${PAGE_SIZE}&FromDate=${day}&ToDate=${day}`;
+      const data = await apiGet(`/Bookings?${query}`);
+      if (!Array.isArray(data?.items)) return null;
+      pages = Number(data.totalPages) || 1;
+      for (const raw of data.items) {
+        const item = apiBooking(raw);
+        if (item.id == null || seen.has(item.id)) continue; // moved to the next page meanwhile
+        seen.add(item.id);
+        items.push(item);
+      }
+    }
+    return items;
+  }
+
   // ---------- washes in progress ----------
 
   // When each wash started, by booking number: { at, exact, saved }. Exact is the start of the
@@ -1022,34 +1194,20 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       .catch(() => {});
   }
 
-  // The request the portal's "View Details" makes, with its login (its cookies): only the start
-  // of the service is kept from the answer.
+  // The request the portal's "View Details" makes: only the start of the service is kept.
   async function fetchStart(id) {
-    const token = cookie('access_token');
-    if (!token) return null;
-    const headers = {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`,
-      'Accept-Language': cookie('lang') || 'en',
-    };
-    const provider = cookie('selected_service_provider');
-    if (provider) headers['X-Service-Provider-Id'] = provider;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-    try {
-      const response = await fetch(`${API_BASE}/Bookings/${id}`, {
-        headers,
-        cache: 'no-store',
-        signal: controller.signal,
-      });
-      if (!response.ok) return null;
-      const body = await response.json();
-      const value = body?.data?.timeline?.startServiceTime;
-      const at = value ? new Date(value).getTime() : NaN; // parsed like the portal shows it
-      return Number.isFinite(at) && at <= Date.now() + MINUTE ? at : null;
-    } finally {
-      clearTimeout(timer);
-    }
+    const data = await apiGet(`/Bookings/${id}`);
+    const value = data?.timeline?.startServiceTime;
+    const at = value ? new Date(value).getTime() : NaN; // parsed like the portal shows it
+    return Number.isFinite(at) && at <= Date.now() + MINUTE ? at : null;
+  }
+
+  // A wash's colour without asking or saving anything (the tabs that show what another one saw).
+  function itemTone(item, now) {
+    if (!item.washing) return lateLevel(item, now);
+    washStarts ??= loadWashStarts();
+    const start = washStarts[item.id];
+    return start ? washTone(start, now) : 'green';
   }
 
   // Green while washing, yellow after WASH_YELLOW_MINUTES, red after WASH_RED_MINUTES.
@@ -1137,7 +1295,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     if (fresh.length) {
       for (const item of fresh) seen[item.id] = joinedLate ? 0 : now;
       store.set(storeKey, JSON.stringify(seen));
-      if (!joinedLate) notify('swx:new-bookings', fresh, bookingLine, NEW_BOOKING_SOUND);
+      if (!joinedLate) alertOnce('new', 'swx:new-bookings', fresh, bookingLine, NEW_BOOKING_SOUND);
     }
     let count = 0;
     for (const item of bookings) {
@@ -1171,44 +1329,31 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       changed = true;
     }
     if (changed) store.set(storeKey, JSON.stringify(known));
-    if (fresh.length) {
-      const line = (item) => `${bookingLine(item)} — ${item.statusText}`;
-      notify('swx:cancelled', fresh, line, CANCEL_ALERT_SOUND);
-    }
+    alertOnce('cancel', 'swx:cancelled', fresh, cancelLine, CANCEL_ALERT_SOUND);
     for (const item of bookings) {
       const at = known[item.id]?.at;
       setFlag(inner(item.idCell), ATTR_CANCELLED, at > 0 && now - at < NEW_BADGE_MS);
     }
   }
 
+  const cancelLine = (item) => `${bookingLine(item)} — ${item.statusText}`;
+
   // Bookings that turned red (late, or washing too long): one notification with the beep per
-  // batch, once per booking for being late and once for a long wash. Today's bookings only. The
-  // ones already told are kept for this tab, so the automatic reloads don't repeat them.
-  function alertRed(items, now) {
+  // batch, once per booking for being late and once for a long wash (by any tab, see
+  // alertOnce). Today's bookings only. `path`: where clicking the notification goes.
+  function alertRed(items, now, path = null) {
     if (!RED_ALERTS) return;
     const today = ymd(now);
     const red = items.filter(
       (item) => item.tone === 'red' && item.id != null && item.ts != null && ymd(item.ts) === today,
     );
-    if (!red.length) return;
-    let told = {};
-    try {
-      told = JSON.parse(store.get('redAlerts') || '{}') || {};
-    } catch {}
-    const key = (item) => `${item.id}:${item.washing ? 'wash' : 'late'}`;
-    const fresh = red.filter((item) => !(key(item) in told));
-    if (!fresh.length) return;
-    for (const item of fresh) told[key(item)] = now;
-    for (const [entry, at] of Object.entries(told)) {
-      if (!(now - at < ALERT_KEEP_MS)) delete told[entry];
-    }
-    store.set('redAlerts', JSON.stringify(told));
     const reason = (item) =>
-      item.washing
+      item.washing && item.start
         ? TXT.washing(stopwatch(now - item.start.at), item.start.exact)
         : `${item.statusText} · ${lateLabel(item, now)}`;
     const line = (item) => `${bookingLine(item, false)} — ${reason(item)}`;
-    notify('swx:red-alert', fresh, line, RED_ALERT_SOUND);
+    const kind = (item) => (item.washing ? 'wash' : 'late');
+    alertOnce(kind, 'swx:red-alert', red, line, RED_ALERT_SOUND, path);
   }
 
   // "3:15 PM · Kawsar Hosain (1986) · Wurood · B-5583962"
@@ -1219,20 +1364,64 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       .join(' · ');
   }
 
-  // background.js turns this into the sound and the Windows notification. Without the extension
-  // (the phone userscript, or after the extension was reloaded) the page does what it can.
-  function notify(type, items, lineOf, sound) {
+  // ---------- alerts given, shared by the portal's tabs ----------
+
+  // The alerts given by every tab of the portal: { "late:123": when }. A booking is told once per
+  // kind (new, cancel, late, wash), whoever saw it first: this list, the watcher (another page) or
+  // another tab. Also kept in memory, should the storage be blocked.
+  function loadAlerted() {
+    let saved = null;
+    try {
+      saved = JSON.parse(prefs.get('alerted') || 'null');
+    } catch {}
+    return { ...alertedMemory, ...(saved && typeof saved === 'object' ? saved : {}) };
+  }
+
+  // What the tabs share is read and written by one of them at a time (Web Locks, see LOCKS).
+  function exclusive(fn) {
+    if (!LOCKS) return safe(fn);
+    LOCKS.request('swx-shared', () => safe(fn)).catch(markError);
+  }
+
+  // In exclusive(): the items not told yet as `kind` (a name, or one per item), now marked told.
+  function claim(kind, items, now) {
+    if (!items.length) return items;
+    const alerted = loadAlerted();
+    const key = (item) => `${typeof kind === 'function' ? kind(item) : kind}:${item.id}`;
+    const fresh = items.filter((item) => !(key(item) in alerted));
+    if (!fresh.length) return fresh;
+    for (const item of fresh) alerted[key(item)] = now;
+    for (const [entry, at] of Object.entries(alerted)) {
+      if (!(now - at < ALERTED_KEEP_MS)) delete alerted[entry];
+    }
+    alertedMemory = alerted;
+    prefs.set('alerted', JSON.stringify(alerted));
+    return fresh;
+  }
+
+  function alertOnce(kind, type, items, lineOf, sound, path = null) {
+    if (!items.length) return;
+    exclusive(() => {
+      const fresh = claim(kind, items, Date.now());
+      if (fresh.length) notify(type, fresh, lineOf, sound, path);
+    });
+  }
+
+  // background.js turns this into the sound and the Windows notification (clicking it brings the
+  // tab forward, at `path` if given). Without the extension (the phone userscript, or after the
+  // extension was reloaded) the page does what it can.
+  function notify(type, items, lineOf, sound, path = null) {
     const lines = [...items]
       .sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity))
       .map((item) => lineOf(item)); // map(lineOf) would pass the index as bookingLine's withId
     try {
       if (globalThis.chrome?.runtime?.id) {
-        const sent = chrome.runtime.sendMessage({ type, count: items.length, lines, sound });
+        const sent = chrome.runtime.sendMessage({ type, count: items.length, lines, sound, path });
         sent?.catch?.(() => {});
         return;
       }
     } catch {}
-    pageAlert(type, items.length, lines, sound).catch(markError);
+    pageAlert(type, items.length, lines, sound, path).catch(markError);
   }
 
   // ---------- sounds and notifications without the extension (phones) ----------
@@ -1241,24 +1430,38 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     'swx:new-bookings': 'new',
     'swx:red-alert': 'red',
     'swx:cancelled': 'cancel',
+    'swx:action-needed': 'red',
   };
 
   // The sound plays when the browser lets the page play one (on Android: autoplay allowed for the
   // site in Firefox, or a tap since the page loaded), and the notification shows in the phone's
   // bar if the site may send them.
-  async function pageAlert(type, count, lines, sound) {
+  async function pageAlert(type, count, lines, sound, path) {
     if (!PAGE_SOUNDS) return;
     const played = sound ? await playSound(ALERT_SOUNDS[type]) : false;
     if (globalThis.Notification?.permission !== 'granted') return;
     const shown = lines.slice(0, 4);
     try {
-      new Notification(TXT.alertTitles[type](count), {
+      const note = new Notification(TXT.alertTitles[type](count), {
         body: shown.join('\n') + (count > shown.length ? `\n+${count - shown.length}` : ''),
         lang: 'ar',
         dir: 'rtl',
         silent: played, // our sound instead of the phone's, not both
       });
+      note.onclick = () => {
+        window.focus();
+        if (path) goTo(path);
+      };
     } catch {} // some phone browsers only take notifications from a service worker
+  }
+
+  // To another page of the portal: in place where its router follows the address (the phone
+  // version, which runs in the page's own world, keeps its permission to play sound that way),
+  // else a new load.
+  function goTo(path) {
+    if (location.pathname.replace(/\/$/, '') === path) return;
+    if (PAGE_WORLD) history.pushState(history.state, '', path);
+    else location.assign(path);
   }
 
   // One <audio> per sound, played again for every alert: Safari on the iPhone lets a page play an
@@ -1317,11 +1520,11 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     }
   }
 
-  // "🔴 2 · " before the tab's title while red bookings are on the list, so they show from the
-  // other tabs too.
-  function markTitle(red) {
+  // "🔴 2 · " before the tab's title while there are red bookings, so they show from the other
+  // tabs too ("⚠ 5 · " on the Daily Operations page: the bookings it lists).
+  function markTitle(count, mark = '🔴') {
     const base = document.title.replace(TITLE_PREFIX_RE, '');
-    const title = red ? `🔴 ${red} · ${base}` : base;
+    const title = count ? `${mark} ${count} · ${base}` : base;
     if (document.title !== title) document.title = title;
   }
 
@@ -1397,6 +1600,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     const nextWashing = [];
     let nextBikers = [];
     const otherPages = hasOtherPages(); // more than a page today: the rest isn't on screen
+    const shown = []; // the bookings on screen, for the portal's other tabs (see shareList)
     // This view seen as one page of several, now as the whole day: its pages were joined late.
     const partialKey = `partial:${viewKey()}`;
     const joinedLate = !otherPages && store.get(partialKey) === '1';
@@ -1432,7 +1636,9 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       next.parsed += parsed;
       next.past += past;
       nextBikers = nextBikers.concat(summarizeBikers(items, now));
+      for (const item of items) if (item.data && item.id != null) shown.push(item);
     }
+    if (shown.length && listCoversDay()) shareList(shown, now);
     if (next.rows) {
       // Only a table with bookings says so (not the portal's loading row).
       if (otherPages) store.set(partialKey, '1');
@@ -1444,6 +1650,316 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     markTitle(next.red);
     observer?.takeRecords(); // our own writes must not trigger another pass
     renderPill();
+  }
+
+  // ---------- watching from any page ----------
+
+  // The day the watcher follows: the list's "today", which turns GRACE_MINUTES after midnight.
+  const watchDay = () => ymd(Date.now() - GRACE_MS);
+
+  // The list on screen shows the watched day, all of it (no filter, no other page): it sees (and
+  // tells) everything itself.
+  const DAY_VIEW_PARAMS = ['fromDate', 'toDate', 'pageSize', 'page'];
+  function listCoversDay() {
+    const day = watchDay();
+    if (!onList() || param('fromDate') !== day || param('toDate') !== day) return false;
+    // (Spread rather than keys(): Firefox's content scripts can't iterate what keys() returns.)
+    const keys = [...new URLSearchParams(location.search)].map(([key]) => key);
+    return keys.every((key) => DAY_VIEW_PARAMS.includes(key)) && !hasOtherPages();
+  }
+
+  // The watched day's bookings as last seen by any tab: { day, ids: { id: [cancelled 0/1, when
+  // first seen (0: there from the first look)] } }. The watcher tells what's new or cancelled
+  // since, whichever tab saw it before.
+  function loadDay(day) {
+    let saved = null;
+    try {
+      saved = JSON.parse(prefs.get('watchDay') || 'null');
+    } catch {}
+    return saved?.day === day && saved.ids && typeof saved.ids === 'object' ? saved.ids : null;
+  }
+
+  // Records the day's bookings; `alert`: tells the new and cancelled ones (the watcher; the list
+  // tells them itself). The day's first look is only recorded.
+  function noteDay(day, items, alert) {
+    exclusive(() => {
+      const now = Date.now();
+      const known = loadDay(day);
+      const ids = known || {};
+      const fresh = [];
+      const cancelled = [];
+      for (const item of items) {
+        const was = ids[item.id];
+        const flag = item.cancelled ? 1 : 0;
+        if (!Array.isArray(was)) {
+          ids[item.id] = [flag, known ? now : 0];
+          if (known) fresh.push(item);
+        } else if (was[0] !== flag) {
+          ids[item.id] = [flag, was[1]];
+          if (flag) cancelled.push(item);
+        }
+      }
+      prefs.set('watchDay', JSON.stringify({ day, ids }));
+      if (!alert) return;
+      const told = claim('new', fresh, now);
+      if (told.length) notify('swx:new-bookings', told, bookingLine, NEW_BOOKING_SOUND, LIST_PATH);
+      const gone = claim('cancel', cancelled, now);
+      if (gone.length) notify('swx:cancelled', gone, cancelLine, CANCEL_ALERT_SOUND, LIST_PATH);
+    });
+  }
+
+  // What the other pages show (the short pill, the title): { day, itemsAt, items, actionsAt,
+  // actions, denied }, from the watching tab or a tab with the list. Read again when another tab
+  // writes it (onStorage).
+  const SHARED_FIELDS = ['id', 'idText', 'ts', 'biker', 'bikerName', 'zone', 'statusText'];
+  const SHARED_FLAGS = ['cancelled', 'done', 'initiated', 'onWay', 'reached', 'washing'];
+  const sharedItem = (item) => ({
+    ...Object.fromEntries(SHARED_FIELDS.map((key) => [key, item[key] ?? null])),
+    ...Object.fromEntries(SHARED_FLAGS.map((key) => [key, Boolean(item[key])])),
+  });
+
+  function sharedWatch() {
+    if (!watchCache) {
+      try {
+        watchCache = JSON.parse(prefs.get('watch') || 'null');
+      } catch {}
+      if (!watchCache || typeof watchCache !== 'object') watchCache = {};
+    }
+    return watchCache;
+  }
+
+  function share(part) {
+    watchCache = { ...sharedWatch(), ...part };
+    prefs.set('watch', JSON.stringify(watchCache));
+  }
+
+  // The list showing the watched day tells the other tabs what it shows (when it changes, and
+  // every SHARE_MS so they know it's still current).
+  function shareList(items, now) {
+    const signature = items.map((item) => `${item.id}:${item.statusText}`).join('|');
+    if (signature === lastShare.signature && now - lastShare.at < SHARE_MS) return;
+    lastShare = { at: now, signature };
+    const day = watchDay();
+    noteDay(day, items, false);
+    share({ day, itemsAt: now, items: items.map(sharedItem) });
+  }
+
+  // One tab watches for all the portal's tabs: the first to ask holds the lock until it closes,
+  // then the next one takes over. Without Web Locks every tab watches (alertOnce still gives each
+  // alert once).
+  function startWatch() {
+    if (!ALL_PAGES_ALERTS && !ACTION_ALERTS) return;
+    if (!LOCKS) {
+      watchLeader = true;
+      return;
+    }
+    LOCKS.request('swx-watch', () => {
+      watchLeader = true;
+      return new Promise(() => {}); // held for as long as the page lives
+    }).catch(markError);
+  }
+
+  // Every second: the Daily Operations lists every ACTIONS_WATCH_MS, the day's bookings every
+  // WATCH_MS (unless the list on screen shows them), and the red ones every REAPPLY_MS.
+  function tickWatch(now) {
+    if (!watchLeader) return;
+    if (ACTION_ALERTS && !actionsBusy && now >= nextActionsAt) {
+      nextActionsAt = now + ACTIONS_WATCH_MS;
+      actionsBusy = true;
+      watchActions()
+        .catch(markError)
+        .finally(() => (actionsBusy = false));
+    }
+    if (!ALL_PAGES_ALERTS || listCoversDay()) {
+      watchItems = null; // turned off, or the list on screen has them
+    } else if (!watchBusy && now >= nextWatchAt) {
+      nextWatchAt = now + WATCH_MS;
+      watchBusy = true;
+      watchBookings()
+        .catch(markError)
+        .finally(() => (watchBusy = false));
+    } else if (watchItems && now - lastRedCheckAt >= REAPPLY_MS) {
+      checkRed(now);
+    }
+  }
+
+  async function watchBookings() {
+    const day = watchDay();
+    const items = await fetchDay(day);
+    share({ denied: apiDenied >= 2 });
+    if (!items || !licenseActive || listCoversDay()) return; // the next try in WATCH_MS
+    watchItems = items;
+    noteDay(day, items, true);
+    share({ day, itemsAt: Date.now(), items: items.map(sharedItem) });
+    checkRed(Date.now());
+  }
+
+  function checkRed(now) {
+    lastRedCheckAt = now;
+    for (const item of watchItems) {
+      if (item.washing && item.id != null) item.start = washStart(item, now);
+      item.tone = rowTone(item, now);
+    }
+    alertRed(watchItems, now, LIST_PATH);
+  }
+
+  // The Daily Operations lists: the bookings the portal says need something done now, read from
+  // the backend whatever the page (the portal's own page stops asking while its tab is hidden).
+  // A booking entering one is told once, like a red one: one alert for being late (the first
+  // three lists), one for a long wash (the last).
+  async function watchActions() {
+    const lists = await Promise.all(ACTIONS.map(({ kind }) => apiGet(`/DailyActions/${kind}`)));
+    if (!licenseActive || lists.some((list) => !Array.isArray(list))) return;
+    const now = Date.now();
+    const actions = {};
+    const all = [];
+    ACTIONS.forEach(({ kind, alert }, index) => {
+      actions[kind] = lists[index].map((raw) => actionItem(raw, kind, alert, now));
+      all.push(...actions[kind].filter((item) => item.id != null));
+    });
+    share({ actionsAt: now, actions });
+    alertOnce(
+      (item) => item.alert,
+      'swx:action-needed',
+      all,
+      actionLine,
+      ACTION_ALERT_SOUND,
+      OPS_PATH,
+    );
+  }
+
+  function actionItem(raw, kind, alert, now) {
+    const id = numberId(raw?.bookingID);
+    const day = parseDate(ymd(now));
+    const time = parseTime(raw?.startBookingTime);
+    return {
+      id,
+      idText: id == null ? '' : `#${id}`,
+      ts: time ? new Date(day.y, day.m, day.d, time.h, time.mi).getTime() : null,
+      bikerName: norm(raw?.bikerName) || null,
+      kind,
+      alert,
+    };
+  }
+
+  const actionLine = (item) => `${TXT.actionNames[item.kind]} — ${bookingLine(item)}`;
+
+  // What the short pill and the title show away from the list: the shared bookings and Daily
+  // Operations lists, if current. Null when there's nothing to show.
+  function watchView(now) {
+    const watch = sharedWatch();
+    const fresh = (at) => Number.isFinite(at) && now - at < WATCH_FRESH_MS;
+    const items =
+      watch.day === watchDay() && fresh(watch.itemsAt) && Array.isArray(watch.items)
+        ? watch.items.map((item) => ({ ...item, data: true }))
+        : null;
+    const actions = fresh(watch.actionsAt) && watch.actions ? watch.actions : null;
+    const denied = apiDenied >= 2 || watch.denied === true;
+    if (!items && !actions && !denied) return null;
+    const counts = emptyStats();
+    for (const item of items || []) {
+      counts.total++;
+      if (item.cancelled) counts.cancelled++;
+      else if (item.done) counts.done++;
+      else counts.remaining++;
+      if (item.cancelled || item.done) continue;
+      item.tone = itemTone(item, now);
+      if (item.washing) item.start = (washStarts ??= loadWashStarts())[item.id] || null;
+      if (item.tone) counts[item.tone]++;
+    }
+    const seen = loadDay(watchDay()) || {};
+    counts.fresh = (items || []).filter((item) => {
+      const first = seen[item.id]?.[1];
+      return first > 0 && now - first < NEW_BADGE_MS;
+    }).length;
+    const waiting = actions
+      ? Object.values(actions).reduce((sum, list) => sum + list.length, 0)
+      : 0;
+    return { items, counts, waiting, denied };
+  }
+
+  // ---------- Daily Operations ----------
+
+  // The portal's four lists of bookings to act on. On each card: how late it is (from its time),
+  // its colour, the latest first (by CSS order, so React's nodes stay where it put them), and call
+  // and WhatsApp links next to the biker's number.
+  function applyOps() {
+    if (!licenseActive) return;
+    const now = Date.now();
+    const day = parseDate(ymd(now));
+    for (const list of Array.from(document.querySelectorAll('#root [data-slot="card-content"]'))) {
+      const cards = Array.from(list.children).filter((el) =>
+        el.matches('.cursor-pointer.border-l-4'),
+      );
+      setFlag(list, ATTR_OPS, cards.length > 0);
+      const items = cards.map((card) => opsCard(card, day));
+      items.sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity) || (a.id ?? 0) - (b.id ?? 0));
+      items.forEach((item, order) => {
+        if (item.card.style.order !== String(order)) item.card.style.order = String(order);
+        const tone =
+          item.ts == null
+            ? null
+            : now >= item.ts
+              ? 'red'
+              : item.ts - now <= SOON_MS
+                ? 'yellow'
+                : null;
+        setValue(item.card, ATTR_TONE, tone);
+        if (item.time)
+          setValue(item.time, ATTR_NOTE, item.ts == null ? null : lateLabel(item, now));
+        addContact(item);
+      });
+    }
+    observer?.takeRecords(); // our own writes must not trigger another pass
+  }
+
+  // A card: "#123" and its time on top, then the biker's name, then the number.
+  function opsCard(card, day) {
+    const clock = card.querySelector('svg.lucide-clock');
+    const phone = card.querySelector('svg.lucide-phone');
+    const time = parseTime(clock?.nextElementSibling?.textContent);
+    return {
+      card,
+      id: numberId(norm(card.querySelector('span')?.textContent).replace(/^#/, '')),
+      ts: time ? new Date(day.y, day.m, day.d, time.h, time.mi).getTime() : null,
+      time: clock?.parentElement || null, // the note goes after the time, on the same line
+      phoneRow: phone?.parentElement || null,
+      phone: norm(phone?.nextElementSibling?.textContent),
+    };
+  }
+
+  // Once per card and number: React keeps the nodes it didn't make, and a card it draws again
+  // gets them back on the next pass. A click on them doesn't open the booking, as one on the card
+  // does.
+  function addContact(item) {
+    const row = item.phoneRow;
+    if (!row) return;
+    const number = saudiNumber(item.phone);
+    let box = row.querySelector(':scope > .swx-contact');
+    if (box && box.dataset.number === number) return;
+    box?.remove();
+    if (!number) return;
+    box = make('span', 'swx-contact');
+    box.dataset.number = number;
+    const call = make('a', 'swx-call', TXT.call);
+    call.href = `tel:+${number}`;
+    call.title = TXT.callTitle(item.phone);
+    const chat = make('a', 'swx-chat', TXT.whatsapp);
+    chat.href = `https://wa.me/${number}`;
+    chat.target = '_blank';
+    chat.rel = 'noopener noreferrer';
+    chat.title = TXT.whatsappTitle(item.phone);
+    for (const link of [call, chat]) {
+      link.addEventListener('click', (event) => event.stopPropagation());
+    }
+    box.append(call, chat);
+    row.append(box);
+  }
+
+  // "0551234567", "551234567" or "+966 55 123 4567" → "966551234567"; null if not a mobile.
+  function saudiNumber(text) {
+    const m = /^(?:00966|966|0)?(5\d{8})$/.exec(norm(text).replace(/\D/g, ''));
+    return m ? `966${m[1]}` : null;
   }
 
   // ---------- sorting ----------
@@ -1485,10 +2001,10 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   }
 
   function onClick(event) {
-    if (!onList()) return;
     // A click anywhere outside the pill closes its panels.
     const outside = pill && !event.composedPath().includes(pill.host);
     if ((panelOpen || editorOpen) && outside) setPanel(null);
+    if (!onList()) return;
     const th = sortableHeader(event.target);
     if (th) return toggleSort(th.getAttribute(ATTR_SORTABLE));
     const item = event.target instanceof Element && event.target.closest('[role="menuitem"]');
@@ -1616,13 +2132,21 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   function tick() {
     safe(() => {
       checkRoute();
-      if (onList()) tickLicense(Date.now());
+      tickLicense(Date.now());
+      if (licenseActive) {
+        const now = Date.now();
+        tickWatch(now);
+        checkAutoplay(now);
+        if (onOps() && now - lastApplyAt >= REAPPLY_MS) {
+          lastApplyAt = now;
+          applyOps();
+        }
+      }
       if (onList() && licenseActive) {
         const now = Date.now();
         if (now - lastApplyAt >= REAPPLY_MS) applyAll();
         else tickWashing(now);
         checkRefetch(now);
-        checkAutoplay(now);
         if (!refreshing && now >= nextRefreshAt) {
           const reason = busyReason(now);
           if (reason) phase = reason;
@@ -1745,7 +2269,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     renderPill();
   }
 
-  // Every second on the list: asks the sheet when it's time, and starts or stops the features
+  // Every second, on any page: asks the sheet when it's time, and starts or stops the features
   // when its answer (or the clock) says so.
   function tickLicense(now) {
     if (!LICENSE_URL) return;
@@ -1773,6 +2297,10 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   // is refreshed once.
   function unlock() {
     licenseActive = true;
+    if (!onList()) {
+      if (!pagesJoined) joinPages(); // for the list, should the portal go there in place
+      return;
+    }
     if (needsPageSize()) {
       location.replace(pageSizeUrl());
       return;
@@ -1929,7 +2457,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       </div>
       <div class="pill" dir="rtl" lang="ar">
         <div class="row">
-          <span class="part">
+          <span class="part clock">
             <button type="button" class="status" aria-expanded="false"></button>
             <button type="button" class="refresh-now">${TXT.refreshNow}</button>
           </span>
@@ -1940,6 +2468,10 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
         <div class="row">
           <span class="part">
             <button type="button" class="bikers" aria-expanded="false">${TXT.bikers}</button>
+          </span>
+          <span class="part goto" hidden>
+            <span class="sep">·</span>
+            <button type="button" class="to-list">${TXT.toBookings}</button>
           </span>
           <span class="part sound" hidden>
             <span class="sep">·</span>
@@ -1970,8 +2502,10 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     pill = {
       host,
       shadow,
+      clock: find('.clock'),
       status: find('.status'),
       refreshNow: find('.refresh-now'),
+      goto: find('.goto'),
       summary: find('.summary'),
       summaryText: find('.summary-text'),
       late: find('.late'),
@@ -2019,6 +2553,9 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     pill.refreshNow.addEventListener('click', () => {
       if (!refreshing) startRefresh(true).catch(markError);
     });
+    const toList = find('.to-list');
+    toList.title = TXT.toBookingsTitle;
+    toList.addEventListener('click', () => goTo(LIST_PATH));
     find('.close').addEventListener('click', () => setPanel(null));
     find('.close-refresh').addEventListener('click', () => setPanel(null));
     find('.reset').addEventListener('click', () => setSort(DEFAULT_SORT.key, DEFAULT_SORT.dir));
@@ -2129,10 +2666,11 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     );
   }
 
-  function warnings() {
+  function warnings(view = null) {
     const list = [];
-    if (stats.rows > 0 && stats.parsed === 0) list.push(TXT.unreadable);
-    if (hasOtherPages()) list.push(TXT.morePages);
+    if (view?.denied || apiDenied >= 2) list.push(TXT.loginExpired);
+    if (!view && stats.rows > 0 && stats.parsed === 0) list.push(TXT.unreadable);
+    if (!view && hasOtherPages()) list.push(TXT.morePages);
     if (new Date().getTimezoneOffset() !== RIYADH_TZ_OFFSET) list.push(TXT.timezone);
     const days = licenseDaysLeft(Date.now());
     if (days != null && days <= LICENSE_WARN_DAYS) list.push(TXT.licenseEnds(days));
@@ -2152,12 +2690,8 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   function renderPill() {
     const p = ensurePill();
     if (!p) return;
-    const visible = onList();
-    p.host.style.setProperty('display', visible ? 'block' : 'none', 'important');
-    if (!visible) {
-      markTitle(0);
-      return;
-    }
+    if (!onList()) return renderPagePill(p);
+    p.host.style.setProperty('display', 'block', 'important');
     p.lock.hidden = licenseActive;
     for (const row of p.rows) row.hidden = !licenseActive;
     if (!licenseActive) {
@@ -2165,6 +2699,9 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       renderLock(p);
       return;
     }
+    p.clock.hidden = false;
+    p.goto.hidden = true;
+    p.bikersButton.parentElement.hidden = false;
     setText(p.status, statusText());
     p.refreshNow.disabled = refreshing;
     setValue(p.status, 'title', TXT.refreshTitle(refreshMinutes));
@@ -2196,6 +2733,46 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     renderPanel(p);
   }
 
+  // Away from the list: the day at a glance from what the watcher (or a tab with the list) saw,
+  // the bikers panel, and the way to the list. Nothing while there's nothing to show.
+  function renderPagePill(p) {
+    const now = Date.now();
+    const view = licenseActive ? watchView(now) : null;
+    if (onOps()) markTitle(view?.waiting || 0, '⚠');
+    else markTitle(view?.counts.red || 0);
+    const visible = Boolean(view && (view.items || view.denied));
+    p.host.style.setProperty('display', visible ? 'block' : 'none', 'important');
+    if (!visible) return;
+    const counts = view.counts;
+    p.lock.hidden = true;
+    p.editor.hidden = true;
+    for (const row of p.rows) row.hidden = false;
+    p.clock.hidden = true;
+    p.goto.hidden = false;
+    p.summary.hidden = counts.total === 0;
+    setText(p.summaryText, TXT.summary(counts));
+    const late = [
+      counts.red && `🔴 ${counts.red}`,
+      counts.yellow && `🟡 ${counts.yellow}`,
+      counts.green && `🟢 ${counts.green}`,
+    ];
+    p.late.hidden = !counts.red && !counts.yellow && !counts.green;
+    setText(p.lateText, late.filter(Boolean).join(' · '));
+    p.fresh.hidden = counts.fresh === 0;
+    setText(p.freshText, TXT.freshCount(counts.fresh));
+    p.bikersButton.parentElement.hidden = !view.items;
+    p.goto.querySelector('.sep').hidden = !view.items; // first in its row then
+    p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
+    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on' || soundState === 'asking';
+    p.past.hidden = true;
+    p.sort.hidden = true;
+    const list = warnings(view);
+    p.warn.hidden = list.length === 0;
+    setText(p.warnText, list.join(' · '));
+    bikers = panelOpen && view.items ? summarizeBikers(view.items, now) : [];
+    renderPanel(p);
+  }
+
   function toggleShowPast() {
     showPast = !showPast;
     if (showPast) store.set('showPast', '1');
@@ -2224,7 +2801,9 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       window.addEventListener('pageshow', tick);
       document.addEventListener('visibilitychange', tick);
       setInterval(tick, 1000);
+      startWatch();
       if (onList()) applyAll();
+      else if (onOps()) applyOps();
       tick();
     });
   }
@@ -2241,6 +2820,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     safe(() => {
       checkRoute();
       if (onList()) applyAll();
+      else if (onOps()) applyOps();
     });
     observer.takeRecords();
   });

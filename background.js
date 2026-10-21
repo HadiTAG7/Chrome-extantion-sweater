@@ -18,15 +18,24 @@ const ALERTS = {
     sound: 'cancel',
     title: (count) => (count === 1 ? 'حجز ملغي' : `حجوزات ملغية (${count})`),
   },
+  'swx:action-needed': {
+    sound: 'red',
+    title: (count) => (count === 1 ? 'يحتاج إجراء' : `تحتاج إجراء (${count})`),
+  },
 };
+
+const PORTAL = 'https://ssp-portal.sweater.sa';
+// The id of a notification: the tab, the sound (two alerts at once don't replace each other), the
+// time, and the page clicking it opens (a path of the portal, if the alert came with one).
+const NOTIFICATION_ID_RE = /^swx-(\d+)-[a-z]+-\d+(?:-(\/[\w/-]*))?$/;
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   const alert = ALERTS[message?.type];
   if (!alert || !sender.tab) return;
   const { count, lines, sound } = message;
   const shown = lines.slice(0, 4);
-  // The sound's name keeps two alerts of the same moment apart (the same id would replace one).
-  const id = `swx-${sender.tab.id}-${alert.sound}-${Date.now()}`;
+  const path = /^\/[\w/-]*$/.test(message.path || '') ? `-${message.path}` : '';
+  const id = `swx-${sender.tab.id}-${alert.sound}-${Date.now()}${path}`;
   const options = {
     type: 'basic',
     iconUrl: 'icons/icon128.png',
@@ -50,17 +59,28 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   if (sound) playChime(alert.sound);
 });
 
-// Clicking the notification brings the bookings tab forward. Its id carries the tab id, so this
-// works even after Chrome restarted the service worker in between.
-chrome.notifications.onClicked.addListener((id) => {
-  const tabId = Number(/^swx-(\d+)-/.exec(id)?.[1]);
+// Clicking the notification brings its tab forward, on the alert's page if it came with one (an
+// alert from another page: the list, or Daily Operations). The id carries all that, so this works
+// even after Chrome restarted the service worker in between.
+chrome.notifications.onClicked.addListener((id) => openNotification(id));
+
+function openNotification(id) {
+  const [, tab, path] = NOTIFICATION_ID_RE.exec(id) || [];
   chrome.notifications.clear(id);
+  const tabId = Number(tab);
   if (!tabId) return;
-  chrome.tabs.update(tabId, { active: true }, (tab) => {
-    if (chrome.runtime.lastError || !tab) return;
-    chrome.windows.update(tab.windowId, { focused: true });
+  chrome.tabs.get(tabId, (current) => {
+    if (chrome.runtime.lastError || !current) return;
+    const update = { active: true };
+    // Already there (when the tab's address can be read): no new load.
+    const at = /^https:\/\/[^/]+(\/[^?#]*)/.exec(current.url || '')?.[1]?.replace(/(.)\/$/, '$1');
+    if (path && at !== path) update.url = PORTAL + path;
+    chrome.tabs.update(tabId, update, (updated) => {
+      if (chrome.runtime.lastError || !updated) return;
+      chrome.windows.update(updated.windowId, { focused: true });
+    });
   });
-});
+}
 
 // The bookings page can't play sound right after its automatic reload (Chrome's autoplay rule),
 // so the sounds play in a hidden extension page. Chrome closes it again after 30 s of silence.
