@@ -3,6 +3,7 @@
 // addons.mozilla.org. Same code as for Chrome, with Firefox's own manifest.json:
 //   - the background runs as a page (background.scripts): Firefox has no service worker for
 //     extensions, and the page plays the sounds itself, so there's no offscreen document,
+//   - page.js is a content script in the page's own world (Chrome's background.js registers it),
 //   - an add-on id and the data collection statement, which Mozilla needs to sign it: with
 //     subscriptions set up (LICENSE_URL in content.js), the code typed is sent to the owner's
 //     Google Sheet, with a random id for the device. That's "authentication information" by
@@ -19,12 +20,26 @@ const DIST = path.join(ROOT, 'dist');
 const STAGE = path.join(DIST, 'firefox');
 // Signed versions are tied to this id: it never changes.
 const GECKO_ID = 'sweater-bookings@haditag7';
-const FILES = ['background.js', 'content.js', 'content.css', 'icons', 'sounds'];
+const FILES = ['background.js', 'content.js', 'page.js', 'content.css', 'icons', 'sounds'];
 
 const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'utf8'));
 const firefox = {
   ...manifest,
-  permissions: manifest.permissions.filter((permission) => permission !== 'offscreen'),
+  // No offscreen document (above), and page.js runs from the manifest (below), not registered by
+  // background.js (that's what "scripting" and the host permission are for).
+  permissions: manifest.permissions.filter((name) => !['offscreen', 'scripting'].includes(name)),
+  host_permissions: undefined,
+  // page.js in the page's own JS world, before content.js (Firefox 128+; older ones ignore that,
+  // and content.js loads it as a file, see page.js).
+  content_scripts: [
+    {
+      matches: manifest.content_scripts[0].matches,
+      js: ['page.js'],
+      run_at: 'document_start',
+      world: 'MAIN',
+    },
+    ...manifest.content_scripts,
+  ],
   background: { scripts: ['background.js'] },
   browser_specific_settings: {
     gecko: {

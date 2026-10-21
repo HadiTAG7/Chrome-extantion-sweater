@@ -100,3 +100,21 @@ async function playChime(sound) {
   }
   if (!self.lastChime?.ok) console.warn('[Sweater helper] chime', self.lastChime);
 }
+
+// page.js has to be in the bookings page's own JS world before the portal's first request.
+// Chrome runs it there, right after content.js, once it's registered here (Chrome 102+; needs the
+// host permission). Not from manifest.json: Chrome 109, the last one for Windows 7, would run it
+// in the extension's own world there, and a file runs only once in a page. Firefox has it in its
+// own manifest.json (tools/build-firefox.js), and no chrome.scripting.
+if (chrome.scripting?.registerContentScripts) {
+  chrome.scripting
+    .getRegisteredContentScripts({ ids: ['page'] })
+    .then((registered) => {
+      if (registered.length) return;
+      const { matches } = chrome.runtime.getManifest().content_scripts[0]; // where content.js runs
+      return chrome.scripting.registerContentScripts([
+        { id: 'page', matches, js: ['page.js'], runAt: 'document_start', world: 'MAIN' },
+      ]);
+    })
+    .catch((error) => console.warn('[Sweater helper] page.js', error));
+}

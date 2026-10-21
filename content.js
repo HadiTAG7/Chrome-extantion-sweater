@@ -15,7 +15,8 @@
  *   - rounds the portal's service times ("58.46666666666667m" → "58m"),
  *   - refreshes the page every few minutes (set from the pill; follows "today" past midnight),
  *     the phone version without reloading it,
- *   - keeps the whole day on one page (pageSize = PAGE_SIZE),
+ *   - keeps the whole day in one table: pageSize = PAGE_SIZE in the address (the most the server
+ *     gives at once), and the day's other pages joined to the first (page.js),
  *   - shows a status pill at the bottom of the page: countdown (and a refresh-now button), day
  *     summary, a live per-biker panel (what each one is doing now, what's next, a copy-for-WhatsApp
  *     button) and the controls,
@@ -32,7 +33,7 @@
   // ===== الإعدادات: عدّلها هنا ثم اضغط زر التحديث ↻ على الإضافة في chrome://extensions =====
   const REFRESH_MINUTES = 5; // كل كم دقيقة تتحدّث الصفحة (افتراضياً، وتقدر تغيّره من الشريط)
   const GRACE_MINUTES = 30; // الغسلة الملغية تختفي بعد موعدها بكم دقيقة (اللي خلصت تختفي على طول)
-  const PAGE_SIZE = 50; // عدد الصفوف في الصفحة (50 أكبر خيار يعرضه الموقع)
+  const PAGE_SIZE = 100; // كم حجز تطلبه البوابة من السيرفر بالمرة (100 أكثر شي يعطيه)، والباقي تجيبه الإضافة في نفس الجدول
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
   const LATE_RED_MINUTES = 10; // وباقي هالكم دقيقة أو أقل، أو عدى موعدها: أحمر (وما تختفي)
   const ONWAY_YELLOW_MINUTES = 10; // غسلة لسا في الطريق (On the Way) وباقي هالكم دقيقة أو أقل: أصفر
@@ -46,7 +47,7 @@
   const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
   const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.16.0';
+  const VERSION = '1.17.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -80,6 +81,7 @@
   const ASK_AUTOPLAY_MS = 3 * 1000; // Firefox on Android may still be asking the app about sound
   const PROBE_TIMEOUT_MS = 8 * 1000;
   const SPA_FIX_GUARD_MS = 30 * 1000;
+  const MAX_JOINED_PAGES = 10; // a day's pages are joined up to this many (1000 bookings)
   const RIYADH_TZ_OFFSET = -180; // Date#getTimezoneOffset() in Saudi Arabia (UTC+3, no DST)
   const TITLE_PREFIX_RE = /^🔴 \d+ · /; // the red count this script puts before the tab's title
 
@@ -279,6 +281,8 @@
   // The phone userscript brings the sounds along and plays them in the page; the extension plays
   // its own from background.js.
   const PAGE_SOUNDS = window.__swxSounds || null;
+  const PAGE_WORLD = Boolean(PAGE_SOUNDS); // the phone version runs in the page's own JS world
+  let pagesJoined = false; // see joinPages
   let players = {}; // one <audio> per sound, see player()
   // Firefox on Android only learns the site's autoplay setting (from the app) once the page has
   // made a sound, and again on every load: so the sounds are made right away, and the browser's
@@ -453,7 +457,7 @@
     const recent = now - (Number(store.get('psFixAt')) || 0) < SPA_FIX_GUARD_MS;
     if (recent && now - lastActivityAt > ACTIVITY_GRACE_MS) return false;
     store.set('psFixAt', now);
-    if (PAGE_SOUNDS) {
+    if (PAGE_WORLD) {
       // The phone version runs in the page's own JS world, where the portal's router follows the
       // address: the whole day loads in place (a reload would take the sound away).
       history.replaceState(history.state, '', pageSizeUrl());
@@ -507,6 +511,34 @@
       phase = 'idle';
     }
     noteTrackedDay();
+  }
+
+  // ---------- the whole day in one table ----------
+
+  // page.js joins the day's pages in the portal's own JS world, before its first request (this
+  // runs at document start). It takes the settings from here: as an event when the browser ran it
+  // there already (Firefox), or from the page when it starts right after this (Chrome) or is
+  // loaded as one of the extension's files (elsewhere). The phone version brings it along, in the
+  // same world already.
+  function joinPages() {
+    const settings = { pageSize: PAGE_SIZE, maxPages: MAX_JOINED_PAGES };
+    if (PAGE_WORLD) {
+      window.__swxJoinPages?.(settings);
+    } else {
+      const detail = JSON.stringify(settings);
+      // Also left on the page for a page.js that starts after this one (see page.js).
+      document.documentElement.dataset.swxJoin = detail;
+      if (document.dispatchEvent(new CustomEvent('swx:join', { detail, cancelable: true }))) {
+        // Nobody took it: page.js isn't in the page yet. In Chrome it starts right after this, but
+        // not on the first load after the extension is installed or updated: loaded as a file, it
+        // finds it there, or does the joining itself.
+        const script = document.createElement('script');
+        script.src = chrome.runtime.getURL('page.js');
+        script.onload = () => script.remove();
+        (document.head || document.documentElement).appendChild(script);
+      }
+    }
+    pagesJoined = true;
   }
 
   // ---------- refresh interval (chosen from the pill) ----------
@@ -929,7 +961,9 @@
   // Bookings that weren't in this view at its earlier loads (this tab): "new" for
   // NEW_BADGE_MINUTES, plus one Windows notification per batch. The first table seen for a view
   // (or its "No bookings found." row) is only recorded. Returns how many rows are new.
-  function markNew(items, now) {
+  // `joinedLate`: the table just grew from one page of several to the whole day (page.js came in
+  // after the portal's first request): what the other pages bring was there all along, not new.
+  function markNew(items, now, joinedLate) {
     const bookings = items.filter((item) => item.data && item.id != null);
     const storeKey = `seen:${viewKey()}`;
     let seen = null;
@@ -944,9 +978,9 @@
     }
     const fresh = bookings.filter((item) => !(item.id in seen));
     if (fresh.length) {
-      for (const item of fresh) seen[item.id] = now;
+      for (const item of fresh) seen[item.id] = joinedLate ? 0 : now;
       store.set(storeKey, JSON.stringify(seen));
-      notify('swx:new-bookings', fresh, bookingLine, NEW_BOOKING_SOUND);
+      if (!joinedLate) notify('swx:new-bookings', fresh, bookingLine, NEW_BOOKING_SOUND);
     }
     let count = 0;
     for (const item of bookings) {
@@ -1206,6 +1240,9 @@
     const nextWashing = [];
     let nextBikers = [];
     const otherPages = hasOtherPages(); // more than a page today: the rest isn't on screen
+    // This view seen as one page of several, now as the whole day: its pages were joined late.
+    const partialKey = `partial:${viewKey()}`;
+    const joinedLate = !otherPages && store.get(partialKey) === '1';
     for (const table of bookingTables()) {
       const tbody = table.tBodies[0];
       if (!tbody) continue;
@@ -1225,7 +1262,7 @@
         if (item.ts != null) parsed++;
         if (hidden) past++;
       }
-      next.fresh += markNew(items, now);
+      next.fresh += markNew(items, now, joinedLate);
       markCancelled(items, now);
       alertRed(items, now);
       if (parsed) sortRows(tbody, items);
@@ -1238,6 +1275,11 @@
       next.parsed += parsed;
       next.past += past;
       nextBikers = nextBikers.concat(summarizeBikers(items, now));
+    }
+    if (next.rows) {
+      // Only a table with bookings says so (not the portal's loading row).
+      if (otherPages) store.set(partialKey, '1');
+      else if (joinedLate) store.del(partialKey);
     }
     stats = next;
     bikers = nextBikers;
@@ -1569,16 +1611,20 @@
   }
 
   // A code accepted (or renewed) with the page open: nothing was touched meanwhile, so the
-  // features start right away, once the page shows the whole day.
+  // features start right away, once the page shows the whole day: it loads again if it didn't ask
+  // for all of it, and a table that's one page of several (its pages weren't joined while locked)
+  // is refreshed once.
   function unlock() {
     licenseActive = true;
     if (needsPageSize()) {
       location.replace(pageSizeUrl());
       return;
     }
+    if (!pagesJoined) joinPages();
     nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
     phase = 'idle';
     applyAll();
+    if (hasOtherPages()) startRefresh(true).catch(markError);
   }
 
   // The pill's «تفعيل»: the code typed is saved and checked; a valid one starts the features.
@@ -2027,6 +2073,7 @@
   }
 
   if (licenseActive) safe(fixPageSizeEarly);
+  if (licenseActive) safe(joinPages);
   lastHref = location.href;
   wasOnList = onList();
   if (wasOnList) noteTrackedDay();

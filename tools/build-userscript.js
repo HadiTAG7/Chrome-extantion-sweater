@@ -1,6 +1,7 @@
 // Builds mobile/sweater-bookings.user.js, the phone version of the extension (Tampermonkey in
-// Firefox on Android, the Userscripts app for Safari on iPhone), from content.css and content.js.
-// Run it after changing either of them:  node tools/build-userscript.js
+// Firefox on Android, the Userscripts app for Safari on iPhone), from content.css, page.js and
+// content.js.
+// Run it after changing any of them:  node tools/build-userscript.js
 'use strict';
 
 const fs = require('fs');
@@ -15,6 +16,7 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
 const manifest = JSON.parse(read('manifest.json'));
 const css = read('content.css');
 const js = read('content.js');
+const page = read('page.js'); // in the same world here: it waits for content.js to call it
 
 // Page world (@grant none, @inject-into page) like the tests: the start of a wash is then asked
 // from the portal's own origin, which its backend accepts.
@@ -65,10 +67,10 @@ const sounds = `window.__swxSounds = ${JSON.stringify({
 })};`;
 
 const note = [
-  '// Built by tools/build-userscript.js from content.css and content.js: edit those, not this',
+  '// Built by tools/build-userscript.js from content.css, page.js and content.js: edit those, not this',
   '// file, then run `node tools/build-userscript.js`.',
 ].join('\n');
 
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
-fs.writeFileSync(OUT, `${header}\n\n${note}\n\n${styles}\n\n${sounds}\n\n${js}`);
+fs.writeFileSync(OUT, `${header}\n\n${note}\n\n${styles}\n\n${sounds}\n\n${page}\n${js}`);
 console.log(`${path.relative(ROOT, OUT)}: version ${manifest.version}`);

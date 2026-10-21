@@ -2,14 +2,15 @@
   "manifest_version": 3,
   "name": "مساعد حجوزات سويتر",
   "short_name": "حجوزات سويتر",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "يخفي الغسلات اللي خلصت، يرتّبها، ينبّه على المتأخرة والجديدة، يحسب وقت الغسيل، ويحدّث صفحة الحجوزات تلقائياً.",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["notifications", "offscreen"],
+  "permissions": ["notifications", "offscreen", "scripting"],
+  "host_permissions": ["https://ssp-portal.sweater.sa/*"],
   "background": {
     "service_worker": "background.js"
   },
@@ -19,6 +20,12 @@
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page.js"],
+      "matches": ["https://ssp-portal.sweater.sa/*"]
     }
   ]
 }
