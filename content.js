@@ -57,7 +57,7 @@
   const ACTION_ALERTS = true; // تنبيه لما يدخل حجز في أعمدة «العمليات اليومية» (المفروض في الطريق، وصل، بدأ، خلص)
   const ACTION_ALERT_SOUND = true; // صوت «بيب بيب» مع تنبيه العمليات اليومية (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.18.2';
+  const VERSION = '1.18.3';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -259,6 +259,15 @@
     bikersActive: (n) => `البايكرية · ${n} نشط`,
     activeTitle: (n, leave) =>
       `${n} بايكر نشط (Active) في البوابة${leave ? `، منهم ${leave} في إجازة اليوم` : ''}`,
+    average: (n) => `متوسط غسلات البايكر: ${n}`,
+    averageTitle: ({ washes, busy, free, leave }) =>
+      [
+        `الغسلات بدون الملغية: ${washes}`,
+        `÷ البايكرية: ${busy + free} (${busy} عندهم غسلات${free ? ` + ${free} نشط بدون غسلات` : ''})`,
+        leave ? `واللي في إجازة ما انحسبوا: ${leave}` : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
     copy: 'نسخ',
     copied: 'انتسخ ✓',
     copyFailed: 'ما انتسخ',
@@ -339,7 +348,7 @@
   let showPast = store.get('showPast') === '1';
   let sort = loadSort();
   let stats = emptyStats();
-  let bikers = []; // per-biker summaries for the panel
+  let bikers = []; // per-biker summaries for the panel and the average
   let washingRows = []; // the rows being washed at the last pass, for the timers' ticks
   // The phone userscript brings the sounds along and plays them in the page; the extension plays
   // its own from background.js.
@@ -398,7 +407,7 @@
   let lastShare = { at: 0, signature: '' }; // see shareList()
   let bikersList; // the active bikers and today's leave, see savedBikers()
   let nextBikersAt = 0;
-  let idle = []; // the active bikers with no wash today, for the panel
+  let idle = []; // the active bikers with no wash today, for the panel and the average
 
   // ---------- helpers ----------
 
@@ -1076,6 +1085,25 @@
         leave: away.has(biker.companyId) || away.has(biker.name),
       }))
       .sort((a, b) => a.leave - b.leave || COLLATOR.compare(a.name, b.name));
+  }
+
+  // The pill's average: the washes (cancelled ones aside) per biker working that day, those with
+  // washes and the free active ones (not those on leave). Null with nothing to divide.
+  function washAverage(summaries, idleList) {
+    if (!summaries.length) return null;
+    const washes = summaries.reduce((sum, biker) => sum + biker.done + biker.left, 0);
+    const free = idleList.filter((biker) => !biker.leave).length;
+    const busy = summaries.length;
+    const value = Math.round((washes / (busy + free)) * 10) / 10; // 2.6, or 3 for 3.0
+    return { value, washes, busy, free, leave: idleList.length - free };
+  }
+
+  // "متوسط غسلات البايكر: 2.6" next to the bikers button, how it's counted in its title.
+  function markAverage(p, average) {
+    p.average.hidden = !average;
+    if (!average) return;
+    setText(p.averageText, TXT.average(average.value));
+    setValue(p.averageText, 'title', TXT.averageTitle(average));
   }
 
   // ---------- washes in progress ----------
@@ -2421,6 +2449,7 @@
           <span class="part">
             <button type="button" class="bikers" aria-expanded="false">${TXT.bikers}</button>
           </span>
+          <span class="part average" hidden><span class="sep">·</span><span class="average-text"></span></span>
           <span class="part goto" hidden>
             <span class="sep">·</span>
             <button type="button" class="to-list">${TXT.toBookings}</button>
@@ -2468,6 +2497,8 @@
       count: find('.count'),
       toggle: find('.toggle'),
       bikersButton: find('.bikers'),
+      average: find('.average'),
+      averageText: find('.average-text'),
       sound: find('.sound'),
       soundOn: find('.sound-on'),
       sort: find('.sort'),
@@ -2691,7 +2722,9 @@
     const list = warnings();
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
-    idle = panelOpen && listCoversDay() ? idleBikers(bikers, Date.now()) : [];
+    idle = listCoversDay() ? idleBikers(bikers, Date.now()) : [];
+    const from = param('fromDate');
+    markAverage(p, from && from === param('toDate') ? washAverage(bikers, idle) : null); // one day
     renderPanel(p);
   }
 
@@ -2732,8 +2765,9 @@
     const list = warnings(view);
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
-    bikers = panelOpen && view.items ? summarizeBikers(view.items, now) : [];
-    idle = panelOpen && view.items ? idleBikers(bikers, now) : [];
+    bikers = view.items ? summarizeBikers(view.items, now) : [];
+    idle = view.items ? idleBikers(bikers, now) : [];
+    markAverage(p, washAverage(bikers, idle));
     renderPanel(p);
   }
 
