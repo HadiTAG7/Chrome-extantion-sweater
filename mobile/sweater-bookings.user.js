@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         مساعد حجوزات سويتر
 // @namespace    https://github.com/HadiTAG7/Chrome-extantion-sweater
-// @version      1.18.1
+// @version      1.18.2
 // @description  يخفي الغسلات اللي خلصت، يرتّبها، ينبّه على المتأخرة والجديدة، يحسب وقت الغسيل، ويحدّث صفحة الحجوزات تلقائياً.
 // @homepageURL  https://github.com/HadiTAG7/Chrome-extantion-sweater
 // @icon         https://raw.githubusercontent.com/HadiTAG7/Chrome-extantion-sweater/HEAD/icons/icon48.png
@@ -214,7 +214,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
   const ACTION_ALERTS = true; // تنبيه لما يدخل حجز في أعمدة «العمليات اليومية» (المفروض في الطريق، وصل، بدأ، خلص)
   const ACTION_ALERT_SOUND = true; // صوت «بيب بيب» مع تنبيه العمليات اليومية (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.18.1';
+  const VERSION = '1.18.2';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
@@ -413,6 +413,9 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     noBikers: 'ما فيه غسلات',
     idleHeading: (n) => `بدون غسلات اليوم (${n})`,
     onLeave: 'إجازة',
+    bikersActive: (n) => `البايكرية · ${n} نشط`,
+    activeTitle: (n, leave) =>
+      `${n} بايكر نشط (Active) في البوابة${leave ? `، منهم ${leave} في إجازة اليوم` : ''}`,
     copy: 'نسخ',
     copied: 'انتسخ ✓',
     copyFailed: 'ما انتسخ',
@@ -1160,8 +1163,8 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     return bikersList;
   }
 
-  // Asked when the bikers panel is open (by any tab), if what's kept is from another day or older
-  // than BIKERS_REFRESH_MS; a failed try waits a minute.
+  // Asked with the pill (by any tab), if what's kept is from another day or older than
+  // BIKERS_REFRESH_MS; a failed try waits a minute.
   function refreshBikers(now) {
     const saved = savedBikers();
     const fresh = saved && saved.day === ymd(now) && now - saved.at < BIKERS_REFRESH_MS;
@@ -1196,6 +1199,23 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
       .filter(Boolean);
     const now = Date.now();
     return { day: ymd(now), at: now, bikers, leave };
+  }
+
+  // The bikers button's count: the active bikers, and how many of them are on leave today.
+  function activeBikers(now) {
+    const saved = savedBikers();
+    if (!saved) return { count: 0, onLeave: 0 };
+    const away = new Set(saved.day === ymd(now) ? saved.leave : []);
+    const onLeave = saved.bikers.filter((b) => away.has(b.companyId) || away.has(b.name)).length;
+    return { count: saved.bikers.length, onLeave };
+  }
+
+  // The bikers button: "البايكرية · 14 نشط" once the active bikers have been read.
+  function markBikersButton(p, now) {
+    refreshBikers(now);
+    const { count, onLeave } = activeBikers(now);
+    setText(p.bikersButton, count ? TXT.bikersActive(count) : TXT.bikers);
+    setValue(p.bikersButton, 'title', count ? TXT.activeTitle(count, onLeave) : null);
   }
 
   // The panel's last part: the active bikers with no wash on the day it shows (those whose only
@@ -2799,6 +2819,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     p.clock.hidden = false;
     p.goto.hidden = true;
     p.bikersButton.parentElement.hidden = false;
+    markBikersButton(p, Date.now());
     setText(p.status, statusText());
     p.refreshNow.disabled = refreshing;
     setValue(p.status, 'title', TXT.refreshTitle(refreshMinutes));
@@ -2827,7 +2848,6 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     const list = warnings();
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
-    if (panelOpen && listCoversDay()) refreshBikers(Date.now());
     idle = panelOpen && listCoversDay() ? idleBikers(bikers, Date.now()) : [];
     renderPanel(p);
   }
@@ -2860,6 +2880,7 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     p.fresh.hidden = counts.fresh === 0;
     setText(p.freshText, TXT.freshCount(counts.fresh));
     p.bikersButton.parentElement.hidden = !view.items;
+    markBikersButton(p, now);
     p.goto.querySelector('.sep').hidden = !view.items; // first in its row then
     p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
     p.sound.hidden = !PAGE_SOUNDS || soundState === 'on' || soundState === 'asking';
@@ -2869,7 +2890,6 @@ window.__swxSounds = {"new":"data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAAD
     p.warn.hidden = list.length === 0;
     setText(p.warnText, list.join(' · '));
     bikers = panelOpen && view.items ? summarizeBikers(view.items, now) : [];
-    if (panelOpen && view.items) refreshBikers(now);
     idle = panelOpen && view.items ? idleBikers(bikers, now) : [];
     renderPanel(p);
   }
