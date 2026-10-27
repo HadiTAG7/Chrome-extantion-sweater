@@ -29,33 +29,41 @@ const PORTAL = 'https://ssp-portal.sweater.sa';
 // time, and the page clicking it opens (a path of the portal, if the alert came with one).
 const NOTIFICATION_ID_RE = /^swx-(\d+)-[a-z]+-\d+(?:-(\/[\w/-]*))?$/;
 
+// The notification and the sound each come only if turned on in the pill's «⚙ الإعدادات» (which
+// content.js reads, and says so in the message). ▶ there plays a sound alone.
 chrome.runtime.onMessage.addListener((message, sender) => {
+  if (message?.type === 'swx:preview') {
+    if (SOUND_FILES[message.sound]) playChime(message.sound);
+    return;
+  }
   const alert = ALERTS[message?.type];
   if (!alert || !sender.tab) return;
   const { count, lines, sound } = message;
-  const shown = lines.slice(0, 4);
-  const path = /^\/[\w/-]*$/.test(message.path || '') ? `-${message.path}` : '';
-  const id = `swx-${sender.tab.id}-${alert.sound}-${Date.now()}${path}`;
-  const options = {
-    type: 'basic',
-    iconUrl: 'icons/icon128.png',
-    title: alert.title(count),
-    message: shown.join('\n') + (count > shown.length ? `\n+${count - shown.length}` : ''),
-    contextMessage: 'مساعد حجوزات سويتر',
-    priority: 2,
-  };
-  // Our sound instead of the Windows one, not both. Firefox refuses the option (the whole
-  // notification with it), and its notifications always come with the Windows sound.
-  if (!IN_PAGE) options.silent = Boolean(sound);
-  Promise.resolve()
-    .then(() => chrome.notifications.create(id, options))
-    .then(
-      () => (self.lastNotification = { id, title: options.title }),
-      (error) => {
-        self.lastNotification = { id, error: String(error?.message || error) };
-        console.warn('[Sweater helper] notification', self.lastNotification);
-      },
-    );
+  if (message.notification !== false) {
+    const shown = lines.slice(0, 4);
+    const path = /^\/[\w/-]*$/.test(message.path || '') ? `-${message.path}` : '';
+    const id = `swx-${sender.tab.id}-${alert.sound}-${Date.now()}${path}`;
+    const options = {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: alert.title(count),
+      message: shown.join('\n') + (count > shown.length ? `\n+${count - shown.length}` : ''),
+      contextMessage: 'مساعد حجوزات سويتر',
+      priority: 2,
+    };
+    // Our sound or none (the settings), never the Windows one too. Firefox refuses the option (the
+    // whole notification with it), and its notifications always come with the Windows sound.
+    if (!IN_PAGE) options.silent = true;
+    Promise.resolve()
+      .then(() => chrome.notifications.create(id, options))
+      .then(
+        () => (self.lastNotification = { id, title: options.title }),
+        (error) => {
+          self.lastNotification = { id, error: String(error?.message || error) };
+          console.warn('[Sweater helper] notification', self.lastNotification);
+        },
+      );
+  }
   if (sound) playChime(alert.sound);
 });
 

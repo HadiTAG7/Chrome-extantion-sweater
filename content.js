@@ -37,8 +37,9 @@
 (() => {
   'use strict';
 
-  // ===== الإعدادات: عدّلها هنا ثم اضغط زر التحديث ↻ على الإضافة في chrome://extensions =====
-  const REFRESH_MINUTES = 5; // كل كم دقيقة تتحدّث الصفحة (افتراضياً، وتقدر تغيّره من الشريط)
+  // ===== الإعدادات الافتراضية: كلها (إلا PAGE_SIZE) تتغيّر من «⚙ الإعدادات» في الشريط، وهذي قيمها
+  // لين أحد يغيّرها هناك. وبعد أي تعديل هنا اضغط زر التحديث ↻ على الإضافة في chrome://extensions =====
+  const REFRESH_MINUTES = 5; // كل كم دقيقة تتحدّث الصفحة
   const GRACE_MINUTES = 30; // الغسلة الملغية تختفي بعد موعدها بكم دقيقة (اللي خلصت تختفي على طول)
   const PAGE_SIZE = 100; // كم حجز تطلبه البوابة من السيرفر بالمرة (100 أكثر شي يعطيه)، والباقي تجيبه الإضافة في نفس الجدول
   const LATE_YELLOW_MINUTES = 20; // غسلة لسا Initiated وباقي على موعدها هالكم دقيقة أو أقل: أصفر
@@ -48,21 +49,50 @@
   const REACHED_RED_MINUTES = 0; // البايكر وصل وما بدأ الغسيل: أحمر لما يبقى على موعدها هالكم دقيقة أو أقل (0: أول ما يجي موعدها)
   const WASH_YELLOW_MINUTES = 60; // غسلة بدأ غسيلها: خضراء، ولما يصير له يغسل هالكم دقيقة: صفراء
   const WASH_RED_MINUTES = 70; // ولما يصير له يغسل هالكم دقيقة: حمراء
-  const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد تبقى هالكم دقيقة
-  const NEW_BOOKING_SOUND = true; // صوت تنبيه الإضافة مع الحجز الجديد (false: صوت إشعار ويندوز بداله)
-  const RED_ALERTS = true; // تنبيه (إشعار وصوت) لما غسلة تصير حمراء، مرة وحدة لكل غسلة
-  const RED_ALERT_SOUND = true; // صوت «بيب بيب» مع التنبيه الأحمر (false: صوت إشعار ويندوز بداله)
-  const CANCEL_ALERT_SOUND = true; // صوت الإضافة مع إشعار الحجز الملغي (false: صوت إشعار ويندوز بداله)
+  const NEW_BADGE_MINUTES = 10; // علامة «جديد» على الحجز الجديد، و«ألغي» على الملغي، تبقى هالكم دقيقة
+  // التنبيهات: لكل نوع إشعار (ويندوز، أو الجوال) وصوت الإضافة، والصوت المقفول يخلّي الإشعار ساكت
+  const ALERT_DEFAULTS = {
+    new: { notification: true, sound: true }, // حجز جديد
+    cancel: { notification: true, sound: true }, // حجز ملغي
+    red: { notification: true, sound: true }, // غسلة صارت حمراء (تأخير، أو غسيل طويل)، مرة وحدة لكل غسلة
+    action: { notification: true, sound: true }, // حجز دخل أعمدة «العمليات اليومية» (المفروض في الطريق، وصل، بدأ، خلص)
+  };
   const ALL_PAGES_ALERTS = true; // التنبيهات (الجديدة والملغية والمتأخرة) تشتغل وأنت في أي صفحة بالبوابة، مو بس صفحة الحجوزات
-  const ACTION_ALERTS = true; // تنبيه لما يدخل حجز في أعمدة «العمليات اليومية» (المفروض في الطريق، وصل، بدأ، خلص)
-  const ACTION_ALERT_SOUND = true; // صوت «بيب بيب» مع تنبيه العمليات اليومية (false: صوت إشعار ويندوز بداله)
 
-  const VERSION = '1.18.3';
+  const VERSION = '1.19.0';
   const MINUTE = 60 * 1000;
   const REFRESH_RANGE = [1, 240]; // minutes the user can pick from the pill
   const REFRESH_PRESETS = [5, 10, 15, 30];
-  const GRACE_MS = GRACE_MINUTES * MINUTE;
-  const NEW_BADGE_MS = NEW_BADGE_MINUTES * MINUTE;
+  // What «⚙ الإعدادات» sets, the defaults above until changed there (the refresh interval aside,
+  // see setRefreshMinutes): the numbers of minutes, [default, lowest, highest]...
+  const NUMBER_SETTINGS = {
+    lateYellow: [LATE_YELLOW_MINUTES, 0, 180],
+    lateRed: [LATE_RED_MINUTES, 0, 180],
+    onwayYellow: [ONWAY_YELLOW_MINUTES, 0, 180],
+    onwayRed: [ONWAY_RED_MINUTES, 0, 180],
+    reachedRed: [REACHED_RED_MINUTES, 0, 180],
+    washYellow: [WASH_YELLOW_MINUTES, 1, 600],
+    washRed: [WASH_RED_MINUTES, 1, 600],
+    newBadge: [NEW_BADGE_MINUTES, 1, 240],
+    grace: [GRACE_MINUTES, 0, 180],
+  };
+  // ...and the switches: each alert's notification and sound, and the alerts away from the list.
+  const SWITCH_SETTINGS = {
+    ...Object.fromEntries(
+      Object.entries(ALERT_DEFAULTS).flatMap(([kind, on]) => [
+        [`notification.${kind}`, on.notification],
+        [`sound.${kind}`, on.sound],
+      ]),
+    ),
+    allPages: ALL_PAGES_ALERTS,
+  };
+  // The alerts (the messages to background.js) by their kind in the settings.
+  const ALERT_KINDS = {
+    'swx:new-bookings': 'new',
+    'swx:cancelled': 'cancel',
+    'swx:red-alert': 'red',
+    'swx:action-needed': 'action',
+  };
   // The portal's own backend: a booking's details say when its wash started.
   const API_BASE = 'https://ssp-portal-backend.sweater.sa/api';
   const LIST_REQUEST_RE = /\/api\/bookings\?/i; // its request for the bookings list
@@ -210,7 +240,8 @@
     pastCount: 'الغسلات المخفية:',
     show: 'إظهار',
     hide: 'إخفاء',
-    toggleTitle: `إظهار أو إخفاء الغسلات اللي خلصت، والملغية اللي عدى موعدها أكثر من ${GRACE_MINUTES} دقيقة`,
+    toggleTitle: (grace) =>
+      `إظهار أو إخفاء الغسلات اللي خلصت، والملغية اللي عدى موعدها أكثر من ${duration(grace)}`,
     noUpcoming: 'لا توجد غسلات باقية',
     noUpcomingHere: 'كل غسلات هالصفحة خلصت، والباقية في الصفحات الثانية',
     sortedBy: 'الترتيب:',
@@ -225,15 +256,15 @@
     seqTitle: (n, total) => `الغسلة ${n} من ${total} لهذا البايكر اليوم`,
     summary: (s) =>
       `الغسلات: ${s.total} · خلصت ${s.done} · باقي ${s.remaining} · ملغية ${s.cancelled}`,
-    lateTitle:
-      `غسلات لسا Initiated: 🔴 باقي ${LATE_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
-      ` 🟡 باقي ${LATE_YELLOW_MINUTES} دقيقة أو أقل.\n` +
-      `غسلات لسا في الطريق: 🔴 باقي ${ONWAY_RED_MINUTES} دقائق أو أقل أو عدى موعدها،` +
-      ` 🟡 باقي ${ONWAY_YELLOW_MINUTES} دقائق أو أقل.\n` +
-      `غسلات بدأ غسيلها: 🟢 من البداية، 🟡 بعد ${duration(WASH_YELLOW_MINUTES)}،` +
-      ` 🔴 بعد ${duration(WASH_RED_MINUTES)}.\n` +
+    lateTitle: (s) =>
+      `غسلات لسا Initiated: 🔴 باقي ${duration(s.lateRed)} أو أقل أو عدى موعدها،` +
+      ` 🟡 باقي ${duration(s.lateYellow)} أو أقل.\n` +
+      `غسلات لسا في الطريق: 🔴 باقي ${duration(s.onwayRed)} أو أقل أو عدى موعدها،` +
+      ` 🟡 باقي ${duration(s.onwayYellow)} أو أقل.\n` +
+      `غسلات بدأ غسيلها: 🟢 من البداية، 🟡 بعد ${duration(s.washYellow)}،` +
+      ` 🔴 بعد ${duration(s.washRed)}.\n` +
       `البايكر وصل وما بدأ الغسيل: 🔴 ${
-        REACHED_RED_MINUTES > 0 ? `باقي ${REACHED_RED_MINUTES} دقائق أو أقل` : 'لما يجي موعدها'
+        s.reachedRed > 0 ? `باقي ${duration(s.reachedRed)} أو أقل` : 'لما يجي موعدها'
       }`,
     freshCount: (n) => `جديدة ${n}`,
     minutesLeft: (n) => `باقي ${duration(n)}`,
@@ -281,6 +312,39 @@
     presets: 'اختيار سريع:',
     refreshHint: `من ${REFRESH_RANGE[0]} إلى ${REFRESH_RANGE[1]} دقيقة، وينحفظ لكل تبويبات البوابة`,
     refreshError: `اكتب رقم صحيح من ${REFRESH_RANGE[0]} إلى ${REFRESH_RANGE[1]}`,
+    // «⚙ الإعدادات»
+    settings: '⚙ الإعدادات',
+    settingsTitle: 'الأصوات والتنبيهات والألوان ووقت التحديث',
+    settingsHeading: 'الإعدادات',
+    alertsHeading: 'التنبيهات',
+    notificationColumn: 'إشعار',
+    soundColumn: 'صوت',
+    alertNames: {
+      new: 'حجز جديد',
+      cancel: 'حجز ملغي',
+      red: 'تأخير (حمراء)',
+      action: 'العمليات اليومية',
+    },
+    preview: '▶',
+    previewTitle: 'اسمع الصوت',
+    allPagesSetting: 'التنبيهات وأنت في باقي صفحات البوابة',
+    firefoxSound:
+      'في فايرفوكس إشعار ويندوز يطلع بصوته دايماً؛ تبي بدون صوت أبداً؟ اقفل الإشعار بعد',
+    colorsHeading: 'الألوان (بالدقائق)',
+    colorRows: { late: 'Initiated', onway: 'في الطريق', reached: 'وصل وما بدأ', wash: 'يغسل' },
+    yellowBefore: 'أصفر قبل',
+    redBefore: 'أحمر قبل',
+    yellowAfter: 'أصفر بعد',
+    redAfter: 'أحمر بعد',
+    minutesShort: 'د',
+    colorsHint: '«قبل»: الوقت الباقي على موعد الحجز (0: لما يجي موعده). «بعد»: من بداية الغسيل.',
+    pageHeading: 'الصفحة',
+    refreshEvery: 'التحديث كل',
+    badgeFor: 'علامة «جديد» و«ألغي» تبقى',
+    graceFor: 'الملغية تختفي بعد موعدها بـ',
+    resetSettings: 'رجوع للافتراضي',
+    settingsHint: 'تنحفظ على طول، ولكل تبويبات البوابة',
+    numberError: (min, max) => `اكتب رقم صحيح من ${min} إلى ${max}`,
     unreadable: '⚠ ما قدرت أقرأ أوقات الغسلات',
     morePages: '⚠ فيه صفحات ثانية',
     timezone: '⚠ توقيت الجهاز مو توقيت السعودية',
@@ -339,6 +403,8 @@
   const store = makeStore('session'); // this tab: survives its automatic reloads
   const prefs = makeStore('local'); // the user's settings: every tab of the portal, kept for good
 
+  let overrides = loadOverrides(); // what «⚙ الإعدادات» changed, see withDefaults()
+  let settings = withDefaults(overrides);
   let refreshMinutes = loadRefreshMinutes();
   let nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
   let lastApplyAt = 0;
@@ -354,11 +420,14 @@
   // its own from background.js.
   const PAGE_SOUNDS = window.__swxSounds || null;
   const PAGE_WORLD = Boolean(PAGE_SOUNDS); // the phone version runs in the page's own JS world
+  // Firefox's add-on: its content scripts run apart from the page (see LOCKS), and its
+  // notifications can't be silent (see the settings).
+  const IN_FIREFOX = Boolean(globalThis.browser?.runtime?.id);
   // Web Locks, where this script can use them: not in Firefox's content scripts, whose functions
   // and promises the page's lock manager isn't allowed to touch.
   const LOCKS = (() => {
     try {
-      return !globalThis.browser?.runtime?.id && navigator.locks?.request ? navigator.locks : null;
+      return !IN_FIREFOX && navigator.locks?.request ? navigator.locks : null;
     } catch {
       return null;
     }
@@ -382,6 +451,7 @@
   const startRequests = new Map(); // booking → when its start time was last asked for
   let panelOpen = false; // the bikers panel
   let editorOpen = false; // the refresh interval editor
+  let settingsOpen = false; // «⚙ الإعدادات»
   let lastHref = '';
   let wasOnList = false;
   let lastDates = null;
@@ -583,7 +653,7 @@
   function rolloverUrl() {
     const tracked = store.get('trackedDay');
     if (!tracked || param('fromDate') !== tracked || param('toDate') !== tracked) return null;
-    const day = ymd(Date.now() - GRACE_MS);
+    const day = ymd(Date.now() - graceMs());
     return day > tracked ? withParams({ fromDate: day, toDate: day, page: null }) : null;
   }
 
@@ -595,7 +665,7 @@
     const entered = nowOnList && !wasOnList;
     wasOnList = nowOnList;
     if (!nowOnList) {
-      panelOpen = editorOpen = false;
+      panelOpen = editorOpen = settingsOpen = false;
       if (refetchWait) {
         refetchWait = null; // no reload away from the list
         refreshing = false;
@@ -619,11 +689,11 @@
   // loaded as one of the extension's files (elsewhere). The phone version brings it along, in the
   // same world already.
   function joinPages() {
-    const settings = { pageSize: PAGE_SIZE, maxPages: MAX_JOINED_PAGES };
+    const join = { pageSize: PAGE_SIZE, maxPages: MAX_JOINED_PAGES };
     if (PAGE_WORLD) {
-      window.__swxJoinPages?.(settings);
+      window.__swxJoinPages?.(join);
     } else {
-      const detail = JSON.stringify(settings);
+      const detail = JSON.stringify(join);
       // Also left on the page for a page.js that starts after this one (see page.js).
       document.documentElement.dataset.swxJoin = detail;
       if (document.dispatchEvent(new CustomEvent('swx:join', { detail, cancelable: true }))) {
@@ -641,11 +711,15 @@
 
   // ---------- refresh interval (chosen from the pill) ----------
 
+  // A whole number within [min, max], typed or kept as text, or null.
+  function validNumber(value, min, max) {
+    if (value == null || String(value).trim() === '') return null;
+    const number = Number(value);
+    return Number.isInteger(number) && number >= min && number <= max ? number : null;
+  }
+
   function validMinutes(value) {
-    const minutes = Number(value);
-    return Number.isInteger(minutes) && minutes >= REFRESH_RANGE[0] && minutes <= REFRESH_RANGE[1]
-      ? minutes
-      : null;
+    return validNumber(value, ...REFRESH_RANGE);
   }
 
   function loadRefreshMinutes() {
@@ -669,13 +743,98 @@
       license = loadLicense(); // checked in another tab: the next tick follows
       return;
     }
+    if (event.key === 'swx:settings') {
+      overrides = loadOverrides(); // changed in another tab
+      settingsChanged();
+      if (settingsOpen) fillSettings(pill);
+      return;
+    }
     if (event.key === 'swx:watch') watchCache = null; // shared by another tab: read again
     if (event.key === 'swx:washStarts') washStarts = null;
     if (event.key === 'swx:bikersList') bikersList = undefined;
     if (event.key !== 'swx:refreshMinutes') return;
     refreshMinutes = loadRefreshMinutes();
     nextRefreshAt = Date.now() + refreshMinutes * MINUTE;
+    if (settingsOpen) fillSettings(pill);
     renderPill();
+  }
+
+  // ---------- settings («⚙ الإعدادات» in the pill) ----------
+
+  // What was changed from the panel, by any tab: only what differs from the defaults, so a default
+  // changed in a later version applies to everything left as it was.
+  function loadOverrides() {
+    let saved = null;
+    try {
+      saved = JSON.parse(prefs.get('settings') || 'null');
+    } catch {}
+    return saved && typeof saved === 'object' ? saved : {};
+  }
+
+  // The settings in use: the defaults (NUMBER_SETTINGS, SWITCH_SETTINGS) and what was changed.
+  function withDefaults(changed) {
+    const result = {};
+    for (const [key, [def, min, max]] of Object.entries(NUMBER_SETTINGS)) {
+      result[key] = validNumber(changed[key], min, max) ?? def;
+    }
+    for (const [key, def] of Object.entries(SWITCH_SETTINGS)) {
+      result[key] = typeof changed[key] === 'boolean' ? changed[key] : def;
+    }
+    return result;
+  }
+
+  // One setting from the panel: kept (also in memory, should the storage be blocked) and in use
+  // at once, here and (through the storage event) in the portal's other tabs.
+  function saveSetting(key, value) {
+    const def = key in NUMBER_SETTINGS ? NUMBER_SETTINGS[key][0] : SWITCH_SETTINGS[key];
+    const next = { ...overrides };
+    if (value === def) delete next[key];
+    else next[key] = value;
+    overrides = next;
+    if (Object.keys(next).length) prefs.set('settings', JSON.stringify(next));
+    else prefs.del('settings');
+    settingsChanged();
+  }
+
+  // «رجوع للافتراضي»: everything as it came, the refresh interval too.
+  function resetSettings() {
+    overrides = {};
+    prefs.del('settings');
+    if (refreshMinutes !== REFRESH_MINUTES) setRefreshMinutes(REFRESH_MINUTES);
+    settingsChanged();
+    fillSettings(pill);
+  }
+
+  // The colours, what's hidden and the marks follow at once on the list; the alerts at their next.
+  function settingsChanged() {
+    settings = withDefaults(overrides);
+    if (onList() && licenseActive) applyAll();
+    else renderPill();
+  }
+
+  function graceMs() {
+    return settings.grace * MINUTE;
+  }
+
+  function badgeMs() {
+    return settings.newBadge * MINUTE;
+  }
+
+  // An alert's notification and sound, as set: { notification, sound }.
+  function alertSettings(type) {
+    const kind = ALERT_KINDS[type];
+    return { notification: settings[`notification.${kind}`], sound: settings[`sound.${kind}`] };
+  }
+
+  // Neither: the alert isn't given at all, nor taken as given (see alertOnce).
+  function alertWanted(type) {
+    const { notification, sound } = alertSettings(type);
+    return notification || sound;
+  }
+
+  // The phone's 🔊 button is only worth showing with a sound to play.
+  function anySound() {
+    return Object.values(ALERT_KINDS).some((kind) => settings[`sound.${kind}`]);
   }
 
   // ---------- reading the table ----------
@@ -869,22 +1028,22 @@
     });
   }
 
-  // [yellow, red] minutes before the booking time, for the statuses whose wash hasn't started:
-  // "Initiated" (the biker hasn't set off), "On the Way" and "Reached" (red only).
+  // [yellow, red] minutes before the booking time (as set), for the statuses whose wash hasn't
+  // started: "Initiated" (the biker hasn't set off), "On the Way" and "Reached" (red only).
   function lateLimits(item) {
-    if (item.initiated) return [LATE_YELLOW_MINUTES, LATE_RED_MINUTES];
-    if (item.onWay) return [ONWAY_YELLOW_MINUTES, ONWAY_RED_MINUTES];
-    if (item.reached) return [REACHED_RED_MINUTES, REACHED_RED_MINUTES];
+    if (item.initiated) return [settings.lateYellow, settings.lateRed];
+    if (item.onWay) return [settings.onwayYellow, settings.onwayRed];
+    if (item.reached) return [settings.reachedRed, settings.reachedRed];
     return null;
   }
 
-  // Off the screen: a finished wash right away, a cancelled one GRACE_MINUTES after its slot.
-  // A wash that isn't finished (on the way, washing...) stays, however late. Without a Status
-  // column only the time is known, so then it's GRACE_MINUTES after the slot for every row.
+  // Off the screen: a finished wash right away, a cancelled one the grace minutes (as set) after
+  // its slot. A wash that isn't finished (on the way, washing...) stays, however late. Without a
+  // Status column only the time is known, so then it's the grace after the slot for every row.
   function isHidden(item, now, hasStatus) {
     if (!item.data) return false;
     if (item.done) return true;
-    const past = item.ts != null && now - item.ts > GRACE_MS;
+    const past = item.ts != null && now - item.ts > graceMs();
     return past && (item.cancelled || !hasStatus);
   }
 
@@ -1178,11 +1337,11 @@
     return start ? washTone(start, now) : 'green';
   }
 
-  // Green while washing, yellow after WASH_YELLOW_MINUTES, red after WASH_RED_MINUTES.
+  // Green while washing, then yellow and red after the minutes set.
   function washTone(start, now) {
     const minutes = (now - start.at) / MINUTE;
-    if (minutes >= WASH_RED_MINUTES) return 'red';
-    return minutes >= WASH_YELLOW_MINUTES ? 'yellow' : 'green';
+    if (minutes >= settings.washRed) return 'red';
+    return minutes >= settings.washYellow ? 'yellow' : 'green';
   }
 
   // The washing row's colour and timer, also run every second between the passes.
@@ -1241,8 +1400,8 @@
       .join('&');
   }
 
-  // Bookings that weren't in this view at its earlier loads (this tab): "new" for
-  // NEW_BADGE_MINUTES, plus one Windows notification per batch. The first table seen for a view
+  // Bookings that weren't in this view at its earlier loads (this tab): "new" for the minutes set,
+  // plus one Windows notification per batch. The first table seen for a view
   // (or its "No bookings found." row) is only recorded. Returns how many rows are new.
   // `joinedLate`: the table just grew from one page of several to the whole day (page.js came in
   // after the portal's first request): what the other pages bring was there all along, not new.
@@ -1263,19 +1422,19 @@
     if (fresh.length) {
       for (const item of fresh) seen[item.id] = joinedLate ? 0 : now;
       store.set(storeKey, JSON.stringify(seen));
-      if (!joinedLate) alertOnce('new', 'swx:new-bookings', fresh, bookingLine, NEW_BOOKING_SOUND);
+      if (!joinedLate) alertOnce('new', 'swx:new-bookings', fresh, bookingLine);
     }
     let count = 0;
     for (const item of bookings) {
-      const isNew = seen[item.id] > 0 && now - seen[item.id] < NEW_BADGE_MS;
+      const isNew = seen[item.id] > 0 && now - seen[item.id] < badgeMs();
       if (isNew) count++;
       setFlag(inner(item.idCell), ATTR_NEW, isNew);
     }
     return count;
   }
 
-  // Bookings that were cancelled since the earlier loads of this view (this tab): "ألغي" for
-  // NEW_BADGE_MINUTES, plus one Windows notification per batch, like the new ones. A booking seen
+  // Bookings that were cancelled since the earlier loads of this view (this tab): "ألغي" for the
+  // minutes set, plus one Windows notification per batch, like the new ones. A booking seen
   // for the first time (the first table of a view, or a new booking) is only recorded.
   function markCancelled(items, now) {
     const bookings = items.filter((item) => item.data && item.id != null);
@@ -1297,10 +1456,10 @@
       changed = true;
     }
     if (changed) store.set(storeKey, JSON.stringify(known));
-    alertOnce('cancel', 'swx:cancelled', fresh, cancelLine, CANCEL_ALERT_SOUND);
+    alertOnce('cancel', 'swx:cancelled', fresh, cancelLine);
     for (const item of bookings) {
       const at = known[item.id]?.at;
-      setFlag(inner(item.idCell), ATTR_CANCELLED, at > 0 && now - at < NEW_BADGE_MS);
+      setFlag(inner(item.idCell), ATTR_CANCELLED, at > 0 && now - at < badgeMs());
     }
   }
 
@@ -1310,7 +1469,7 @@
   // batch, once per booking for being late and once for a long wash (by any tab, see
   // alertOnce). Today's bookings only. `path`: where clicking the notification goes.
   function alertRed(items, now, path = null) {
-    if (!RED_ALERTS) return;
+    if (!alertWanted('swx:red-alert')) return;
     const today = ymd(now);
     const red = items.filter(
       (item) => item.tone === 'red' && item.id != null && item.ts != null && ymd(item.ts) === today,
@@ -1321,7 +1480,7 @@
         : `${item.statusText} · ${lateLabel(item, now)}`;
     const line = (item) => `${bookingLine(item, false)} — ${reason(item)}`;
     const kind = (item) => (item.washing ? 'wash' : 'late');
-    alertOnce(kind, 'swx:red-alert', red, line, RED_ALERT_SOUND, path);
+    alertOnce(kind, 'swx:red-alert', red, line, path);
   }
 
   // "3:15 PM · Kawsar Hosain (1986) · Wurood · B-5583962"
@@ -1367,54 +1526,55 @@
     return fresh;
   }
 
-  function alertOnce(kind, type, items, lineOf, sound, path = null) {
-    if (!items.length) return;
+  // With its notification and its sound both turned off (the settings), an alert isn't given, nor
+  // taken as given: turned on again, it tells what's still to tell (a booking still red).
+  function alertOnce(kind, type, items, lineOf, path = null) {
+    if (!items.length || !alertWanted(type)) return;
     exclusive(() => {
       const fresh = claim(kind, items, Date.now());
-      if (fresh.length) notify(type, fresh, lineOf, sound, path);
+      if (fresh.length) notify(type, fresh, lineOf, path);
     });
   }
 
-  // background.js turns this into the sound and the Windows notification (clicking it brings the
-  // tab forward, at `path` if given). Without the extension (the phone userscript, or after the
-  // extension was reloaded) the page does what it can.
-  function notify(type, items, lineOf, sound, path = null) {
+  // background.js turns this into the sound and the Windows notification, as set (clicking it
+  // brings the tab forward, at `path` if given). Without the extension (the phone userscript, or
+  // after the extension was reloaded) the page does what it can.
+  function notify(type, items, lineOf, path = null) {
+    const { notification, sound } = alertSettings(type);
     const lines = [...items]
       .sort((a, b) => (a.ts ?? Infinity) - (b.ts ?? Infinity))
       .map((item) => lineOf(item)); // map(lineOf) would pass the index as bookingLine's withId
     try {
       if (globalThis.chrome?.runtime?.id) {
-        const sent = chrome.runtime.sendMessage({ type, count: items.length, lines, sound, path });
-        sent?.catch?.(() => {});
+        const message = { type, count: items.length, lines, sound, notification, path };
+        chrome.runtime.sendMessage(message)?.catch?.(() => {});
         return;
       }
     } catch {}
-    pageAlert(type, items.length, lines, sound, path).catch(markError);
+    pageAlert(type, items.length, lines, sound, notification, path).catch(markError);
   }
 
   // ---------- sounds and notifications without the extension (phones) ----------
 
-  const ALERT_SOUNDS = {
-    'swx:new-bookings': 'new',
-    'swx:red-alert': 'red',
-    'swx:cancelled': 'cancel',
-    'swx:action-needed': 'red',
-  };
+  // Each alert's sound, by its kind in the settings.
+  const ALERT_SOUNDS = { new: 'new', cancel: 'cancel', red: 'red', action: 'red' };
 
   // The sound plays when the browser lets the page play one (on Android: autoplay allowed for the
   // site in Firefox, or a tap since the page loaded), and the notification shows in the phone's
-  // bar if the site may send them.
-  async function pageAlert(type, count, lines, sound, path) {
+  // bar if the site may send them; each only if turned on.
+  async function pageAlert(type, count, lines, sound, notification, path) {
     if (!PAGE_SOUNDS) return;
-    const played = sound ? await playSound(ALERT_SOUNDS[type]) : false;
-    if (globalThis.Notification?.permission !== 'granted') return;
+    const played = sound ? await playSound(ALERT_SOUNDS[ALERT_KINDS[type]]) : false;
+    if (!notification || globalThis.Notification?.permission !== 'granted') return;
     const shown = lines.slice(0, 4);
     try {
       const note = new Notification(TXT.alertTitles[type](count), {
         body: shown.join('\n') + (count > shown.length ? `\n+${count - shown.length}` : ''),
         lang: 'ar',
         dir: 'rtl',
-        silent: played, // our sound instead of the phone's, not both
+        // Our sound instead of the phone's, not both (the phone's when ours couldn't play), and
+        // none with the sound turned off.
+        silent: sound ? played : true,
       });
       note.onclick = () => {
         window.focus();
@@ -1478,11 +1638,13 @@
 
   // The pill's 🔊 button: the tap lets this page play sound for as long as it stays open (the
   // sounds are made and loaded during the tap, for Safari), and is the moment to ask for
-  // notifications. With autoplay allowed for the site (Firefox), no tap is needed at all.
+  // notifications. With autoplay allowed for the site (Firefox), no tap is needed at all. It
+  // plays the first alert sound still turned on (see the settings).
   function enableSound() {
     players = {};
     for (const name of Object.keys(PAGE_SOUNDS)) player(name).load();
-    playSound('new');
+    const kind = Object.values(ALERT_KINDS).find((on) => settings[`sound.${on}`]);
+    playSound(ALERT_SOUNDS[kind] || 'new');
     if (globalThis.Notification?.permission === 'default') {
       Notification.requestPermission()?.catch?.(() => {});
     }
@@ -1622,8 +1784,8 @@
 
   // ---------- watching from any page ----------
 
-  // The day the watcher follows: the list's "today", which turns GRACE_MINUTES after midnight.
-  const watchDay = () => ymd(Date.now() - GRACE_MS);
+  // The day the watcher follows: the list's "today", which turns the grace minutes after midnight.
+  const watchDay = () => ymd(Date.now() - graceMs());
 
   // The list on screen shows the watched day, all of it (no filter, no other page): it sees (and
   // tells) everything itself.
@@ -1669,10 +1831,14 @@
       }
       prefs.set('watchDay', JSON.stringify({ day, ids }));
       if (!alert) return;
-      const told = claim('new', fresh, now);
-      if (told.length) notify('swx:new-bookings', told, bookingLine, NEW_BOOKING_SOUND, LIST_PATH);
-      const gone = claim('cancel', cancelled, now);
-      if (gone.length) notify('swx:cancelled', gone, cancelLine, CANCEL_ALERT_SOUND, LIST_PATH);
+      if (alertWanted('swx:new-bookings')) {
+        const told = claim('new', fresh, now);
+        if (told.length) notify('swx:new-bookings', told, bookingLine, LIST_PATH);
+      }
+      if (alertWanted('swx:cancelled')) {
+        const gone = claim('cancel', cancelled, now);
+        if (gone.length) notify('swx:cancelled', gone, cancelLine, LIST_PATH);
+      }
     });
   }
 
@@ -1714,9 +1880,8 @@
 
   // One tab watches for all the portal's tabs: the first to ask holds the lock until it closes,
   // then the next one takes over. Without Web Locks every tab watches (alertOnce still gives each
-  // alert once).
+  // alert once). Whatever the settings, which can change meanwhile.
   function startWatch() {
-    if (!ALL_PAGES_ALERTS && !ACTION_ALERTS) return;
     if (!LOCKS) {
       watchLeader = true;
       return;
@@ -1727,18 +1892,19 @@
     }).catch(markError);
   }
 
-  // Every second: the Daily Operations lists every ACTIONS_WATCH_MS, the day's bookings every
-  // WATCH_MS (unless the list on screen shows them), and the red ones every REAPPLY_MS.
+  // Every second: the Daily Operations lists every ACTIONS_WATCH_MS (their alert as set, their
+  // count in that page's title either way), the day's bookings every WATCH_MS (with the alerts on
+  // the other pages turned on, unless the list on screen shows them), the red ones every REAPPLY_MS.
   function tickWatch(now) {
     if (!watchLeader) return;
-    if (ACTION_ALERTS && !actionsBusy && now >= nextActionsAt) {
+    if (!actionsBusy && now >= nextActionsAt) {
       nextActionsAt = now + ACTIONS_WATCH_MS;
       actionsBusy = true;
       watchActions()
         .catch(markError)
         .finally(() => (actionsBusy = false));
     }
-    if (!ALL_PAGES_ALERTS || listCoversDay()) {
+    if (!settings.allPages || listCoversDay()) {
       watchItems = null; // turned off, or the list on screen has them
     } else if (!watchBusy && now >= nextWatchAt) {
       nextWatchAt = now + WATCH_MS;
@@ -1786,14 +1952,7 @@
       all.push(...actions[kind].filter((item) => item.id != null));
     });
     share({ actionsAt: now, actions });
-    alertOnce(
-      (item) => item.alert,
-      'swx:action-needed',
-      all,
-      actionLine,
-      ACTION_ALERT_SOUND,
-      OPS_PATH,
-    );
+    alertOnce((item) => item.alert, 'swx:action-needed', all, actionLine, OPS_PATH);
   }
 
   function actionItem(raw, kind, alert, now) {
@@ -1838,7 +1997,7 @@
     const seen = loadDay(watchDay()) || {};
     counts.fresh = (items || []).filter((item) => {
       const first = seen[item.id]?.[1];
-      return first > 0 && now - first < NEW_BADGE_MS;
+      return first > 0 && now - first < badgeMs();
     }).length;
     const waiting = actions
       ? Object.values(actions).reduce((sum, list) => sum + list.length, 0)
@@ -1971,7 +2130,7 @@
   function onClick(event) {
     // A click anywhere outside the pill closes its panels.
     const outside = pill && !event.composedPath().includes(pill.host);
-    if ((panelOpen || editorOpen) && outside) setPanel(null);
+    if (anyPanelOpen() && outside) setPanel(null);
     if (!onList()) return;
     const th = sortableHeader(event.target);
     if (th) return toggleSort(th.getAttribute(ATTR_SORTABLE));
@@ -1980,7 +2139,7 @@
   }
 
   function onKeyDown(event) {
-    if (event.key === 'Escape' && (panelOpen || editorOpen)) return setPanel(null);
+    if (event.key === 'Escape' && anyPanelOpen()) return setPanel(null);
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const th = onList() && sortableHeader(event.target);
     if (!th) return;
@@ -1998,7 +2157,7 @@
 
   function busyReason(now) {
     const idle = now - lastActivityAt;
-    const open = panelOpen || editorOpen || overlayOpen();
+    const open = anyPanelOpen() || overlayOpen();
     if (idle < OVERLAY_IDLE_LIMIT_MS && open) return 'overlay';
     if (idle < ACTIVITY_GRACE_MS && now - nextRefreshAt < MAX_ACTIVITY_POSTPONE_MS) {
       return 'activity';
@@ -2252,7 +2411,7 @@
   // without the features, so no row stays hidden, coloured or moved.
   function lock() {
     licenseActive = false;
-    panelOpen = editorOpen = false;
+    panelOpen = editorOpen = settingsOpen = false;
     // At most once a minute, should the storage not keep the answer.
     if (Date.now() - (Number(store.get('lockedAt')) || 0) < LOCK_RELOAD_GUARD_MS) return;
     store.set('lockedAt', Date.now());
@@ -2364,12 +2523,39 @@
     .status:hover { background: none; text-decoration: underline; }
     .panel.refresh { width: min(360px, calc(100vw - 32px)); }
     .refresh-form { display: flex; align-items: center; gap: 8px; padding: 4px 0 8px; }
-    .refresh-form input, .lock input {
+    .refresh-form input, .lock input, input.number {
       font: inherit; color: inherit; text-align: center;
       background: transparent; border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
       border-radius: 8px; padding: 2px 6px;
     }
     .refresh-form input { width: 5em; }
+    /* «⚙ الإعدادات»: the alerts' switches, then the minutes. */
+    .panel.settings { width: min(460px, calc(100vw - 32px)); white-space: normal; }
+    .section-head {
+      padding: 10px 0 4px; font-weight: 700; opacity: 0.85;
+      border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+    }
+    .section-head.first { padding-top: 0; border-top: 0; }
+    .alerts {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto;
+      align-items: center; gap: 4px 16px;
+    }
+    .alerts .col { font-size: 12px; opacity: 0.75; text-align: center; }
+    .panel input[type='checkbox'] {
+      width: 18px; height: 18px; margin: 0; justify-self: center; accent-color: #f97316;
+    }
+    .preview { padding: 0 8px; font-size: 11px; }
+    .switch { display: flex; align-items: center; gap: 8px; padding-top: 8px; }
+    .numbers { display: flex; flex-direction: column; gap: 6px; }
+    .number-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+    .number-row .row-name { min-width: 6.5em; font-weight: 600; }
+    .numbers label { display: inline-flex; align-items: center; gap: 6px; }
+    input.number { width: 4em; padding: 2px 4px; }
+    input.number[aria-invalid='true'] { border-color: #ef4444; }
+    .settings-foot {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding-top: 10px;
+    }
+    .settings-foot .hint { padding-top: 0; }
     /* No valid subscription: the pill asks for the code instead. */
     .lock {
       display: flex; flex-direction: column; align-items: center; gap: 6px;
@@ -2394,6 +2580,7 @@
     /* Touch screens: bigger buttons. */
     @media (pointer: coarse) {
       button { padding: 4px 12px; }
+      .panel input[type='checkbox'] { width: 22px; height: 22px; }
     }
   `;
 
@@ -2435,6 +2622,7 @@
         <div class="hint">${TXT.refreshHint}</div>
         <div class="error" hidden>${TXT.refreshError}</div>
       </div>
+      ${settingsHtml()}
       <div class="pill" dir="rtl" lang="ar">
         <div class="row">
           <span class="part clock">
@@ -2465,6 +2653,10 @@
           <span class="part sort" hidden>
             <span class="sep">·</span><span class="sort-text"></span>
             <button type="button" class="reset">${TXT.resetSort}</button>
+          </span>
+          <span class="part settings-part">
+            <span class="sep">·</span>
+            <button type="button" class="settings-open" aria-expanded="false">${TXT.settings}</button>
           </span>
           <span class="part warn" hidden><span class="sep">·</span><span class="warn-text"></span></span>
         </div>
@@ -2510,7 +2702,11 @@
       panelSignature: null,
       editor: find('.panel.refresh'),
       minutes: find('.minutes'),
-      error: find('.error'),
+      error: find('.refresh .error'),
+      settingsButton: find('.settings-open'),
+      settingsPanel: find('.panel.settings'),
+      settingInputs: shadow.querySelectorAll('[data-setting]'),
+      settingsError: find('.settings-error'),
       rows: shadow.querySelectorAll('.pill > .row'),
       lock: find('.lock'),
       lockText: find('.lock-text'),
@@ -2525,8 +2721,6 @@
       event.preventDefault();
       safe(() => activate(pill.code.value));
     });
-    pill.late.title = TXT.lateTitle;
-    pill.toggle.title = TXT.toggleTitle;
     pill.toggle.addEventListener('click', toggleShowPast);
     pill.bikersButton.addEventListener('click', () => setPanel(panelOpen ? null : 'bikers'));
     pill.soundOn.title = TXT.soundOnTitle;
@@ -2551,14 +2745,83 @@
     for (const preset of shadow.querySelectorAll('[data-minutes]')) {
       preset.addEventListener('click', () => setRefreshMinutes(Number(preset.dataset.minutes)));
     }
+    pill.settingsButton.title = TXT.settingsTitle;
+    pill.settingsButton.addEventListener('click', () => setPanel(settingsOpen ? null : 'settings'));
+    pill.settingsPanel.addEventListener('change', (event) =>
+      safe(() => changeSetting(event.target)),
+    );
+    pill.settingsPanel.addEventListener('click', (event) => {
+      const kind = event.target.closest('[data-preview]')?.dataset.preview;
+      if (kind) safe(() => previewSound(kind));
+    });
+    find('.close-settings').addEventListener('click', () => setPanel(null));
+    find('.reset-settings').addEventListener('click', () => safe(resetSettings));
     document.body.appendChild(host);
     return pill;
   }
 
-  // One panel at a time above the pill: 'bikers', 'refresh' or null (closed).
+  // «⚙ الإعدادات» as ensurePill builds it: per alert its notification, its sound and ▶ to hear
+  // it, then the minutes (each box saying which setting it is).
+  function settingsHtml() {
+    const number = (key) => {
+      const [min, max] = key === 'refreshMinutes' ? REFRESH_RANGE : NUMBER_SETTINGS[key].slice(1);
+      return `<input class="number" type="number" inputmode="numeric" step="1" min="${min}" max="${max}" data-setting="${key}">`;
+    };
+    // The colours' rows: per row, its boxes (their label and setting).
+    const colours = {
+      late: { yellowBefore: 'lateYellow', redBefore: 'lateRed' },
+      onway: { yellowBefore: 'onwayYellow', redBefore: 'onwayRed' },
+      reached: { redBefore: 'reachedRed' },
+      wash: { yellowAfter: 'washYellow', redAfter: 'washRed' },
+    };
+    const minutes = ([row, boxes]) => {
+      const labels = Object.entries(boxes).map(
+        ([text, key]) => `<label>${TXT[text]} ${number(key)} ${TXT.minutesShort}</label>`,
+      );
+      return `<div class="number-row"><span class="row-name">${TXT.colorRows[row]}</span>${labels.join('')}</div>`;
+    };
+    const alert = (kind) => {
+      const name = TXT.alertNames[kind];
+      return `<span>${name}</span>
+        <input type="checkbox" data-setting="notification.${kind}" aria-label="${TXT.notificationColumn}: ${name}">
+        <input type="checkbox" data-setting="sound.${kind}" aria-label="${TXT.soundColumn}: ${name}">
+        <button type="button" class="preview" data-preview="${kind}" title="${TXT.previewTitle}"
+          aria-label="${TXT.previewTitle}: ${name}">${TXT.preview}</button>`;
+    };
+    return `<div class="panel settings" role="dialog" aria-label="${TXT.settingsHeading}" dir="rtl" lang="ar" hidden>
+        <div class="panel-head">
+          <span>${TXT.settingsHeading}</span>
+          <button type="button" class="close-settings" aria-label="${TXT.close}">×</button>
+        </div>
+        <div class="section-head first">${TXT.alertsHeading}</div>
+        <div class="alerts">
+          <span></span><span class="col">${TXT.notificationColumn}</span><span class="col">${TXT.soundColumn}</span><span></span>
+          ${Object.keys(ALERT_DEFAULTS).map(alert).join('')}
+        </div>
+        <label class="switch"><input type="checkbox" data-setting="allPages">${TXT.allPagesSetting}</label>
+        <div class="hint"${IN_FIREFOX ? '' : ' hidden'}>${TXT.firefoxSound}</div>
+        <div class="section-head">${TXT.colorsHeading}</div>
+        <div class="numbers">${Object.entries(colours).map(minutes).join('')}</div>
+        <div class="hint">${TXT.colorsHint}</div>
+        <div class="section-head">${TXT.pageHeading}</div>
+        <div class="numbers">
+          <label>${TXT.refreshEvery} ${number('refreshMinutes')} ${TXT.minutesUnit}</label>
+          <label>${TXT.badgeFor} ${number('newBadge')} ${TXT.minutesUnit}</label>
+          <label>${TXT.graceFor} ${number('grace')} ${TXT.minutesUnit}</label>
+        </div>
+        <div class="error settings-error" role="alert" hidden></div>
+        <div class="settings-foot">
+          <button type="button" class="reset-settings">${TXT.resetSettings}</button>
+          <span class="hint">${TXT.settingsHint}</span>
+        </div>
+      </div>`;
+  }
+
+  // One panel at a time above the pill: 'bikers', 'refresh', 'settings' or null (closed).
   function setPanel(which) {
     panelOpen = which === 'bikers';
     editorOpen = which === 'refresh';
+    settingsOpen = which === 'settings';
     renderPill();
     if (editorOpen && pill) {
       pill.minutes.value = refreshMinutes;
@@ -2566,6 +2829,54 @@
       pill.minutes.focus();
       pill.minutes.select();
     }
+    if (settingsOpen) fillSettings(pill);
+  }
+
+  function anyPanelOpen() {
+    return panelOpen || editorOpen || settingsOpen;
+  }
+
+  // The panel's boxes from the settings in use: when it opens, after «رجوع للافتراضي», or after a
+  // change from another tab (the box being typed in left alone).
+  function fillSettings(p) {
+    if (!p) return;
+    for (const box of p.settingInputs) {
+      if (box === p.shadow.activeElement) continue;
+      const key = box.dataset.setting;
+      if (box.type === 'checkbox') box.checked = settings[key];
+      else box.value = key === 'refreshMinutes' ? refreshMinutes : settings[key];
+      setValue(box, 'aria-invalid', null);
+    }
+    p.settingsError.hidden = true;
+  }
+
+  // A box changed: a switch as soon as it's clicked, a number once typed in (Enter, or leaving the
+  // box) if it's a whole number within its box's range; else the box turns red and says why.
+  function changeSetting(box) {
+    const key = box.dataset?.setting;
+    if (!key) return;
+    if (box.type === 'checkbox') return saveSetting(key, box.checked);
+    const value = validNumber(box.value, Number(box.min), Number(box.max));
+    setValue(box, 'aria-invalid', value == null ? 'true' : null);
+    const bad = [...pill.settingInputs].find((other) => other.getAttribute('aria-invalid'));
+    pill.settingsError.hidden = !bad;
+    if (bad) setText(pill.settingsError, TXT.numberError(bad.min, bad.max));
+    if (value == null) return;
+    if (key === 'refreshMinutes') setRefreshMinutes(value);
+    else saveSetting(key, value);
+  }
+
+  // ▶: the alert's sound, played the way the alerts play it (the extension's hidden page; on the
+  // phone the page itself, where the tap also lets it play the next ones).
+  function previewSound(kind) {
+    const sound = ALERT_SOUNDS[kind];
+    try {
+      if (globalThis.chrome?.runtime?.id) {
+        chrome.runtime.sendMessage({ type: 'swx:preview', sound })?.catch?.(() => {});
+        return;
+      }
+    } catch {}
+    if (PAGE_SOUNDS) playSound(sound);
   }
 
   // Rebuilt only when its content changes, so a "copied" confirmation isn't wiped by the ticks.
@@ -2670,7 +2981,7 @@
 
   // Without a valid subscription: why, and the code box.
   function renderLock(p) {
-    p.panel.hidden = p.editor.hidden = true;
+    p.panel.hidden = p.editor.hidden = p.settingsPanel.hidden = true;
     const reason = TXT.lockReasons[licenseState(Date.now())] || '';
     const until = license.until && license.until.split('-').reverse().join('/'); // 30/11/2026
     const text = typeof reason === 'function' ? reason(until) : reason;
@@ -2711,10 +3022,11 @@
     p.fresh.hidden = stats.fresh === 0;
     setText(p.freshText, TXT.freshCount(stats.fresh));
     p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
-    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on' || soundState === 'asking';
+    renderCommon(p);
     p.past.hidden = stats.past === 0;
     setText(p.count, `${TXT.pastCount} ${stats.past}`);
     setText(p.toggle, showPast ? TXT.hide : TXT.show);
+    setValue(p.toggle, 'title', TXT.toggleTitle(settings.grace));
     p.toggle.setAttribute('aria-pressed', String(showPast));
     p.sort.hidden = isDefaultSort();
     const arrow = sort.dir === 'asc' ? '↑' : '↓';
@@ -2726,6 +3038,15 @@
     const from = param('fromDate');
     markAverage(p, from && from === param('toDate') ? washAverage(bikers, idle) : null); // one day
     renderPanel(p);
+  }
+
+  // The same in both pills: the 🔊 button (with a sound to play), ⚙ and its panel, and what the
+  // colours mean (as set).
+  function renderCommon(p) {
+    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on' || soundState === 'asking' || !anySound();
+    p.settingsPanel.hidden = !settingsOpen;
+    p.settingsButton.setAttribute('aria-expanded', String(settingsOpen));
+    setValue(p.late, 'title', TXT.lateTitle(settings));
   }
 
   // Away from the list: the day at a glance from what the watcher (or a tab with the list) saw,
@@ -2759,7 +3080,7 @@
     markBikersButton(p, now);
     p.goto.querySelector('.sep').hidden = !view.items; // first in its row then
     p.bikersButton.setAttribute('aria-expanded', String(panelOpen));
-    p.sound.hidden = !PAGE_SOUNDS || soundState === 'on' || soundState === 'asking';
+    renderCommon(p);
     p.past.hidden = true;
     p.sort.hidden = true;
     const list = warnings(view);
